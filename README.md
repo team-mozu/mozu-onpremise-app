@@ -1,4 +1,4 @@
-# Mozu On-Premise App (Electron + React + TypeScript)
+# <img width="24" height="24" alt="image" src="https://github.com/user-attachments/assets/de4614f0-7083-445e-942a-5a71efe199a0" /> Mozu On-Premise App (Electron + React + TypeScript)
 
 ## 개요
 - 이 애플리케이션은 Electron, React, TypeScript를 기반으로 개발된 온프레미스 애플리케이션입니다. 
