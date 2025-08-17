@@ -336,7 +336,8 @@ export class Orchestrator {
       const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
       const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
       const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
-      const dbPass = envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
+      // UI에서 받은 비밀번호를 최우선으로 사용하고, 그 다음 .env 파일, 마지막으로 빈 문자열을 사용
+      const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
       const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
 
       // DB 생성 시도

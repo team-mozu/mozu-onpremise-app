@@ -38,6 +38,7 @@ const FIXED_CFG: RepoCfg = {
 export default function App() {
   const [logs, setLogs] = useState<string[]>([])
   const [dir, setDir] = useState<string>('')
+  const [dbPassword, setDbPassword] = useState('')
 
   useEffect(() => {
     const off = window.api.onStatusUpdate((s) => setLogs(s.logs || []))
@@ -50,7 +51,14 @@ export default function App() {
   }
 
   const start = async () => {
-    const payload: RepoCfg = { ...FIXED_CFG, workspaceDir: dir || undefined }
+    const payload: RepoCfg = {
+      ...FIXED_CFG,
+      server: {
+        ...FIXED_CFG.server,
+        dbPassword: dbPassword || undefined,
+      },
+      workspaceDir: dir || undefined,
+    }
     const res = await window.api.startMock(payload)
     if (!res.ok) alert(res.error || '실행 중 오류가 발생했습니다.')
   }
@@ -81,8 +89,27 @@ export default function App() {
         </div>
       </header>
 
-      {/* ✅ 로그 섹션을 전체 폭으로, 가이드는 아래로 */}
       <main className="max-w-6xl mx-auto p-6 space-y-6">
+        <section className="bg-white rounded-2xl p-6 shadow-soft">
+          <h2 className="font-semibold mb-4">설정</h2>
+          <div>
+            <label htmlFor="db-password" className="block text-sm font-medium text-gray-700 mb-1">
+              DB Root 비밀번호
+            </label>
+            <input
+              type="password"
+              id="db-password"
+              value={dbPassword}
+              onChange={(e) => setDbPassword(e.target.value)}
+              className="block w-full max-w-sm px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-carrot focus:border-carrot sm:text-sm"
+              placeholder="MySQL root 계정 비밀번호"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              로컬 MySQL `root` 계정의 비밀번호를 입력하세요.
+            </p>
+          </div>
+        </section>
+
         <section className="bg-white rounded-2xl p-6 shadow-soft">
           <h2 className="font-semibold mb-4">실행 로그</h2>
           <LogPanel lines={logs} />
@@ -94,6 +121,7 @@ export default function App() {
         <section className="bg-white rounded-2xl p-6 shadow-soft">
           <h2 className="font-semibold mb-4">가이드</h2>
           <ol className="list-decimal pl-5 space-y-2 text-sm text-gray-700">
+            <li><b>DB Root 비밀번호</b>를 입력하세요. (없는 경우 비워두세요)</li>
             <li><b>경로 변경</b>으로 설치 위치를 지정하세요. (미지정 시 앱 데이터 경로 사용)</li>
             <li><b>모의주식 시작</b>을 누르면 자동으로 clone → install → start 합니다.</li>
             <li>설치 후 코드는 선택 경로의 <code>server/</code>, <code>frontend/</code>에 생성됩니다.</li>

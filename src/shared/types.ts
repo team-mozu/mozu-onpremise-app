@@ -6,6 +6,7 @@ export type RepoConfig = {
     startCommand?: string; // e.g., 'npm run start'
     installCommand?: string; // e.g., 'npm ci' or 'npm install'
     cwdName?: string;      // folder name to clone into
+    dbPassword?: string;   // DB password for root user
   };
   frontend: {
     url: string;
