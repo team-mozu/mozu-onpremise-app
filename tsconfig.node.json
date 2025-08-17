@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": "src",                // ✅ src 전체를 루트로
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/main/**/*.ts",
+    "src/shared/**/*.ts"             // ✅ shared 타입 포함
+  ],
+  "exclude": [
+    "src/renderer"                   // ✅ 렌더러는 Vite가 처리
+  ]
+}
