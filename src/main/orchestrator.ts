@@ -348,11 +348,9 @@ export class Orchestrator {
       this.mergeWriteEnv(serverDir, {
         DB_HOST: dbHost,
         DB_PORT: String(dbPort),
-        DB_USERNAME: dbUser,
+        DB_NAME: dbUser,
         DB_PASSWORD: dbPass,
         DB_DATABASE: dbName,
-        DATABASE_URL: databaseUrl,
-        TYPEORM_CONNECTION: 'mysql',
       }, notify)
 
       this.update({ step: 'starting', message: 'Starting processes...' }, notify)
