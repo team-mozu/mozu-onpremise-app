@@ -361,7 +361,7 @@ export class Orchestrator {
       const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
       this.log(`[start] server via ${srv.label}`, notify)
       this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: this.envWithDefaultPath(envFromFiles) }),
+        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: false, env: this.envWithDefaultPath(envFromFiles) }),
         cwd: serverDir
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
@@ -372,7 +372,7 @@ export class Orchestrator {
       const fe = await this.resolveStartCommand(frontDir, config.frontend.startCommand)
       this.log(`[start] frontend via ${fe.label}`, notify)
       this.frontend = {
-        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: true, env: this.envWithDefaultPath() }),
+        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: false, env: this.envWithDefaultPath() }),
         cwd: frontDir
       }
       this.frontend.proc?.stdout?.on('data', (d) => this.log(`[frontend] ${d.toString().trim()}`, notify))
