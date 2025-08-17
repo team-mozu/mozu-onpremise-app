@@ -91,6 +91,16 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto p-6 space-y-6">
         <section className="bg-white rounded-2xl p-6 shadow-soft">
+          <h2 className="font-semibold mb-4">가이드</h2>
+          <ol className="list-decimal pl-5 space-y-2 text-sm text-gray-700">
+            <li><b>DB Root 비밀번호</b>를 입력하세요. (없는 경우 비워두세요)</li>
+            <li><b>경로 변경</b>으로 설치 위치를 지정하세요. (미지정 시 앱 데이터 경로 사용)</li>
+            <li><b>모의주식 시작</b>을 누르면 자동으로 clone → install → start 합니다.</li>
+            <li>설치 후 코드는 선택 경로의 <code>server/</code>, <code>frontend/</code>에 생성됩니다.</li>
+          </ol>
+        </section>
+
+        <section className="bg-white rounded-2xl p-6 shadow-soft">
           <h2 className="font-semibold mb-4">설정</h2>
           <div>
             <label htmlFor="db-password" className="block text-sm font-medium text-gray-700 mb-1">
@@ -116,17 +126,6 @@ export default function App() {
           <p className="text-xs text-gray-500 mt-3">
             참고: 코드는 <code>{dir || '앱 데이터 경로'}</code> 아래의 <code>server/</code>, <code>frontend/</code> 폴더에 클론됩니다.
           </p>
-        </section>
-
-        <section className="bg-white rounded-2xl p-6 shadow-soft">
-          <h2 className="font-semibold mb-4">가이드</h2>
-          <ol className="list-decimal pl-5 space-y-2 text-sm text-gray-700">
-            <li><b>DB Root 비밀번호</b>를 입력하세요. (없는 경우 비워두세요)</li>
-            <li><b>경로 변경</b>으로 설치 위치를 지정하세요. (미지정 시 앱 데이터 경로 사용)</li>
-            <li><b>모의주식 시작</b>을 누르면 자동으로 clone → install → start 합니다.</li>
-            <li>설치 후 코드는 선택 경로의 <code>server/</code>, <code>frontend/</code>에 생성됩니다.</li>
-            <li>필요 시 커맨드는 <code>App.tsx</code>의 <code>FIXED_CFG</code>에서 수정하세요.</li>
-          </ol>
         </section>
       </main>
     </div>
