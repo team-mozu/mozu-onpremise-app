@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Button } from './components/Button'
 import { LogPanel } from './components/LogPanel'
+import logo from '../assets/logo.svg'
 
 type RepoCfg = import('@shared/types').RepoConfig
 type LaunchStatus = import('@shared/types').LaunchStatus
@@ -72,7 +73,7 @@ export default function App() {
       <header className="p-6 border-b bg-white">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-carrot"></div>
+            <img src={logo} alt="Mozu On-Premise App Logo" className="w-10 h-10" />
             <div>
               <h1 className="text-xl font-bold">Mozu On-Premise App</h1>
               <p className="text-sm text-gray-500">
