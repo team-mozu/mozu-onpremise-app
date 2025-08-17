@@ -270,7 +270,7 @@ export class Orchestrator {
     if (db.password) args.push(`-p${db.password}`)
     const sql = `CREATE DATABASE IF NOT EXISTS \`${db.database}\` DEFAULT CHARACTER SET utf8mb4;`
     try {
-      await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, true)
+      await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, false)
       this.log(`[mysql] ensured database "${db.database}"`, notify)
     } catch (e:any) {
       this.log(`[mysql] DB 생성 실패: ${e?.message || e}`, notify)
