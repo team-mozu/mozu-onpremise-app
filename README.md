@@ -1,5 +1,5 @@
 
-# MockStock Launcher (Electron + React + TypeScript)
+# mozu On Premise App (Electron + React + TypeScript)
 
 주요 기능:
 - GitHub 서버/프론트 저장소 클론 또는 pull
