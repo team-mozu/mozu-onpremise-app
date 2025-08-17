@@ -74,7 +74,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-carrot"></div>
             <div>
-              <h1 className="text-xl font-bold">MockStock Launcher</h1>
+              <h1 className="text-xl font-bold">Mozu On-Premise App</h1>
               <p className="text-sm text-gray-500">
                 모의주식 환경을 원클릭으로 실행
                 {dir ? <span className="ml-2 text-gray-400">(경로: {dir})</span> : null}
