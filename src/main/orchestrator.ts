@@ -1,4 +1,3 @@
-// src/main/orchestrator.ts
 import { App } from 'electron'
 import { spawn } from 'child_process'
 import fs from 'fs'

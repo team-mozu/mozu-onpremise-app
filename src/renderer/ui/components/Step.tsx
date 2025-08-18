@@ -1,4 +1,3 @@
-
 import React from 'react'
 
 type Props = { index: number, title: string, active?: boolean, done?: boolean }

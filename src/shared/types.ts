@@ -1,4 +1,3 @@
-
 export type RepoConfig = {
   server: {
     url: string;           // Git repository URL for server

@@ -1,4 +1,3 @@
-// preload.ts
 import { contextBridge, ipcRenderer } from 'electron'
 import type { RepoConfig, LaunchStatus } from '../shared/types'
 
