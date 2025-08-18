@@ -75,7 +75,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <img src={logo} alt="Mozu On-Premise App Logo" className="w-10 h-10" />
             <div>
-              <h1 className="text-xl font-bold"><span className="text-carrot">모주</span> <span className="text-base text-[#71717A]">모의주식투자</span></h1>
+              <h1 className="text-xl font-bold"><span className="text-carrot">모주</span> <span className="text-xs text-[#71717A]">모의주식투자</span></h1>
               <p className="text-sm text-gray-500">
                 모의주식투자 환경을 원클릭으로 실행
                 {dir ? <span className="ml-2 text-gray-400">(경로: {dir})</span> : null}
