@@ -29,7 +29,7 @@ const FIXED_CFG: RepoCfg = {
   frontend: {
     url: 'https://github.com/team-mozu/mozu-FE.git',
     branch: 'develop',
-    startCommand: 'yarn workspace @mozu/admin dev',
+    startCommand: 'yarn dev',
     installCommand: 'yarn install',
     cwdName: 'frontend',
     devUrl: 'http://localhost:3000',
