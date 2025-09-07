@@ -79,8 +79,16 @@ export class Orchestrator {
 
   // ---------- preflight ----------
   private async ensureTools() {
-    await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
-    await this.execChecked(this.npmCmd(), ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() })
+    try {
+      await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
+    } catch (err) {
+      throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
+    }
+    try {
+      await this.execChecked(this.npmCmd(), ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() })
+    } catch (err) {
+      throw new Error('npm이 설치되지 않았거나 PATH에 없습니다. Node.js와 npm을 설치하고 다시 시도하세요.')
+    }
   }
 
   private async ensureWorkspace(custom?: string) {
@@ -227,7 +235,8 @@ export class Orchestrator {
         ] as const
         for (const [id, extra] of candidates) {
           try {
-            await this.execStream('winget', ['install','-e','--id', id, ...extra], process.cwd(), notify, true)
+            // --silent: 자동 설치, --accept-package-agreements: 라이선스 동의
+            await this.execStream('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], process.cwd(), notify, true)
             hasMysql = true
             break
           } catch {}
@@ -240,7 +249,8 @@ export class Orchestrator {
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            await this.execStream('choco', ['install','mysql','-y'], process.cwd(), notify, true)
+            // /Password:'' 로 비밀번호 없이 설치
+            await this.execStream('choco', ['install', 'mysql', '-y', '--params', '"/Password:"' ], process.cwd(), notify, true)
             hasMysql = true
           } catch {}
         }
