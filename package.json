@@ -7,9 +7,10 @@
   "author": "you",
   "license": "MIT",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\"",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main:watch\" \"npm:dev:main:run\"",
     "dev:renderer": "vite",
-    "dev:main": "tsc -p tsconfig.node.json --watch & wait-on http://localhost:5173 && electron .",
+    "dev:main:watch": "tsc -p tsconfig.node.json --watch",
+    "dev:main:run": "wait-on http://localhost:5173 ./dist/main/main.js && electron .",
     "build": "rimraf dist && vite build && tsc -p tsconfig.node.json",
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
