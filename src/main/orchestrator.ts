@@ -180,7 +180,7 @@ export class Orchestrator {
       const hasYarn = fs.existsSync(path.join(targetDir, 'yarn.lock'))
       const hasPnpm = fs.existsSync(path.join(targetDir, 'pnpm-lock.yaml'))
       const hasNpmLock = fs.existsSync(path.join(targetDir, 'package-lock.json'))
-      if (hasYarn) cmd = 'yarn install'
+      if (hasYarn) cmd = 'npx yarn install'
       else if (hasPnpm) cmd = 'pnpm install'
       else if (hasNpmLock) cmd = 'npm ci'
       else cmd = 'npm install'
