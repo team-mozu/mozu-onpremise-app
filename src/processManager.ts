@@ -20,7 +20,7 @@ export interface StartOptions {
 }
 
 function spawnSafe(cmd: string, args: string[], opts: SpawnOptions & { tag: Tag; onLog?: StartOptions['onLog'] }): P {
-  const p = spawn(cmd, args, { ...opts, shell: false });
+  const p = spawn(cmd, args, { ...opts, shell: process.platform === 'win32' });
   p.stdout?.on('data', d => opts.onLog?.(opts.tag, d.toString()));
   p.stderr?.on('data', d => opts.onLog?.(opts.tag, d.toString()));
   p.on('exit', (c, s) => opts.onLog?.(opts.tag, `[exit] code=${c} signal=${s}\n`));
