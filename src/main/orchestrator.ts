@@ -78,7 +78,7 @@ export class Orchestrator {
   }
 
   // ---------- preflight ----------
-  private async ensureTools() {
+  private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
       await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
@@ -88,6 +88,18 @@ export class Orchestrator {
       await this.execChecked(this.npmCmd(), ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() })
     } catch (err) {
       throw new Error('npm이 설치되지 않았거나 PATH에 없습니다. Node.js와 npm을 설치하고 다시 시도하세요.')
+    }
+    try {
+      await this.execChecked('yarn', ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() });
+    } catch (err) {
+      this.log('[tools] yarn not found. Attempting to install globally via npm...', notify);
+      try {
+        await this.execStream(this.npmCmd(), ['install', '-g', 'yarn'], os.homedir(), notify, true);
+        this.log('[tools] yarn has been installed globally.', notify);
+      } catch (installErr) {
+        this.log('[tools] Failed to install yarn globally.', notify);
+        throw new Error('yarn을 찾을 수 없으며, npm을 통해 전역으로 설치하는 데에도 실패했습니다. 수동으로 yarn을 설치하고 다시 시도하세요.');
+      }
     }
   }
 
@@ -176,6 +188,9 @@ export class Orchestrator {
   // ---------- deps ----------
   private async installDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
     let cmd = installCommand
+    if (cmd === 'yarn install') {
+      cmd = 'npx yarn install';
+    }
     if (!cmd) {
       const hasYarn = fs.existsSync(path.join(targetDir, 'yarn.lock'))
       const hasPnpm = fs.existsSync(path.join(targetDir, 'pnpm-lock.yaml'))
