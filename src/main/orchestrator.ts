@@ -232,42 +232,63 @@ export class Orchestrator {
   // ---------- Windows: MySQL 설치 / 서비스 시작 ----------
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
+
+    const execElevated = async (cmd: string, args: string[]) => {
+      // PowerShell -Command 인수로 전달될 최종 문자열을 구성합니다.
+      // 각 인수를 작은따옴표로 감싸고, 내부의 작은따옴표는 연속 두 개로 이스케이프 처리합니다.
+      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
+      // Start-Process -Verb RunAs: 관리자 권한으로 실행
+      // -Wait: 프로세스가 끝날 때까지 대기
+      const psCommand = `Start-Process -Verb RunAs -Wait -FilePath "${cmd}" -ArgumentList @(${argString})`;
+      
+      // 위에서 만든 PowerShell 명령어를 실행합니다.
+      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
+    }
+
     // mysql 클라이언트 존재 확인
     let hasMysql = false
     try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
-    if (!hasMysql) {
-      this.log('[mysql] not found. trying to install via winget...', notify)
+    if (hasMysql) {
+      this.log('[mysql] MySQL is already installed.', notify)
+    } else {
+      this.log('[mysql] not found. trying to install via winget with elevation...', notify)
       // winget
       let wingetOk = false
       try { await this.execChecked('winget', ['--version'], { env: this.envWithDefaultPath() }); wingetOk = true } catch {}
       if (wingetOk) {
-        // 여러 id 시도 (환경에 따라 패키지 id가 다를 수 있음)
         const candidates = [
           ['Oracle.MySQL', []],
           ['Oracle.MySQLServer', []],
-          ['Oracle.MySQL', ['--source','winget']],
-          ['Oracle.MySQLServer', ['--source','winget']],
         ] as const
         for (const [id, extra] of candidates) {
           try {
-            // --silent: 자동 설치, --accept-package-agreements: 라이선스 동의
-            await this.execStream('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], process.cwd(), notify, true)
-            hasMysql = true
-            break
-          } catch {}
+            this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
+            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
+            // 설치 후 다시 확인
+            try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
+            if (hasMysql) {
+              this.log(`[mysql] Successfully installed ${id} via winget.`, notify);
+              break;
+            }
+          } catch (e: any) {
+            this.log(`[mysql] winget install for ${id} failed. Error: ${e?.message || e}`, notify);
+          }
         }
       }
       // choco fallback
       if (!hasMysql) {
-        this.log('[mysql] trying Chocolatey...', notify)
+        this.log('[mysql] winget failed. Trying Chocolatey with elevation...', notify)
         let chocoOk = false
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            // /Password:'' 로 비밀번호 없이 설치
-            await this.execStream('choco', ['install', 'mysql', '-y', '--params', '"/Password:"' ], process.cwd(), notify, true)
-            hasMysql = true
-          } catch {}
+            // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
+            await execElevated('choco', ['install', 'mysql', '-y', '--params', `"/Password:''"`]);
+            try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
+            if (hasMysql) this.log(`[mysql] Successfully installed via choco.`, notify);
+          } catch (e: any) {
+            this.log(`[mysql] choco install failed. Error: ${e?.message || e}`, notify);
+          }
         }
       }
       if (!hasMysql) {
@@ -275,14 +296,16 @@ export class Orchestrator {
       }
     }
 
-    // 서비스 시작 시도
-    try {
-      // 서비스 이름에 'MySQL'이 포함된 것을 찾아 시작
-      const startSvc = `Get-Service -Name 'MySQL*' | Start-Service`
-      await this.execStream('powershell', ['-NoProfile', '-Command', startSvc], process.cwd(), notify, true)
-      this.log('[mysql] service started (if installed)', notify)
-    } catch {
-      this.log('[mysql] 서비스 시작 실패(권한/설치 상태 확인). 이미 실행 중일 수 있음.', notify)
+    // 서비스 시작 시도 (관리자 권한으로)
+    if (hasMysql) {
+      try {
+        this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
+        const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
+        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', startSvc]);
+        this.log('[mysql] service start command issued (if installed and not running).', notify)
+      } catch (e: any) {
+        this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
+      }
     }
   }
 
