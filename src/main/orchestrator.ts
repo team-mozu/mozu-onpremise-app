@@ -280,9 +280,16 @@ export class Orchestrator {
         if (chocoOk) {
           try {
             // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
-            await execElevated('choco', ['install', 'mysql', '-y', '--params', `"/Password:''"`]);
-            try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
-            if (hasMysql) this.log(`[mysql] Successfully installed via choco.`, notify);
+            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
+            // 설치 성공 여부를 직접 확인
+            try {
+              await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
+              hasMysql = true;
+              this.log(`[mysql] Successfully installed via choco.`, notify);
+            } catch {
+              // 'where mysql' 명령이 실패하면, choco 설치가 실제로는 실패한 것으로 간주
+              throw new Error("'choco install' command finished, but 'mysql.exe' was not found in PATH.");
+            }
           } catch (e: any) {
             this.log(`[mysql] choco install failed. Error: ${e?.message || e}`, notify);
           }
