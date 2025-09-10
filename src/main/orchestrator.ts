@@ -277,11 +277,9 @@ export class Orchestrator {
 
     // 서비스 시작 시도
     try {
-      // 서비스 이름 자동 탐색
-      const getName = `Get-Service | Where-Object {$_.Name -like 'MySQL*' -or $_.Name -like 'mysql*'} | Select -First 1 -ExpandProperty Name`
-      await this.execStream('powershell', ['-NoProfile','-Command', getName], process.cwd(), notify, true)
-      const startSvc = `Get-Service | Where-Object {$_.Name -like 'MySQL*' -or $_.Name -like 'mysql*'} | Select -First 1 | Start-Service`
-      await this.execStream('powershell', ['-NoProfile','-Command', startSvc], process.cwd(), notify, true)
+      // 서비스 이름에 'MySQL'이 포함된 것을 찾아 시작
+      const startSvc = `Get-Service -Name 'MySQL*' | Start-Service`
+      await this.execStream('powershell', ['-NoProfile', '-Command', startSvc], process.cwd(), notify, true)
       this.log('[mysql] service started (if installed)', notify)
     } catch {
       this.log('[mysql] 서비스 시작 실패(권한/설치 상태 확인). 이미 실행 중일 수 있음.', notify)
@@ -292,11 +290,16 @@ export class Orchestrator {
   private async createDatabaseIfNeeded(db: {host:string;port:number;user:string;password:string;database:string}, notify?: (s: LaunchStatus)=>void) {
     const args = ['-h', db.host, '-P', String(db.port), '-u', db.user]
     if (db.password) args.push(`-p${db.password}`)
-    const sql = `CREATE DATABASE IF NOT EXISTS \`${db.database}\` DEFAULT CHARACTER SET utf8mb4;`
+    const sql = `CREATE DATABASE IF NOT EXISTS 
+${db.database}
+` DEFAULT CHARACTER SET utf8mb4;
     try {
       await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, false)
       this.log(`[mysql] ensured database "${db.database}"`, notify)
     } catch (e:any) {
+      if (e?.message?.includes('ENOENT')) {
+        throw new Error('`mysql` 명령어를 찾을 수 없습니다. MySQL을 설치하고, 설치 경로의 `bin` 폴더를 시스템 환경 변수 PATH에 추가했는지 확인하세요.')
+      }
       this.log(`[mysql] DB 생성 실패: ${e?.message || e}`, notify)
       // 계속 진행은 하지만 서버가 접속 실패할 수 있음
     }
