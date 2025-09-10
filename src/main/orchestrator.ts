@@ -188,7 +188,7 @@ export class Orchestrator {
   // ---------- deps ----------
   private async installDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
     let cmd = installCommand
-    if (cmd === 'yarn install') {
+    if (cmd?.trim().startsWith('yarn')) {
       cmd = 'npx yarn install';
     }
     if (!cmd) {
