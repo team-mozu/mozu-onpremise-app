@@ -234,14 +234,11 @@ export class Orchestrator {
     if (process.platform !== 'win32') return
 
     const execElevated = async (cmd: string, args: string[]) => {
-      // PowerShell -Command 인수로 전달될 최종 문자열을 구성합니다.
-      // 각 인수를 작은따옴표로 감싸고, 내부의 작은따옴표는 연속 두 개로 이스케이프 처리합니다.
       const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-      // Start-Process -Verb RunAs: 관리자 권한으로 실행
-      // -Wait: 프로세스가 끝날 때까지 대기
-      const psCommand = `Start-Process -Verb RunAs -Wait -FilePath "${cmd}" -ArgumentList @(${argString})`;
+      // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
+      // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
+      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
       
-      // 위에서 만든 PowerShell 명령어를 실행합니다.
       await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
     }
 
