@@ -20,7 +20,7 @@ export interface StartOptions {
 }
 
 function spawnSafe(cmd: string, args: string[], opts: SpawnOptions & { tag: Tag; onLog?: StartOptions['onLog'] }): P {
-  const p = spawn(cmd, args, { ...opts, shell: process.platform === 'win32' });
+  const p = spawn(cmd, args, { ...opts, shell: false });
   p.stdout?.on('data', d => opts.onLog?.(opts.tag, d.toString()));
   p.stderr?.on('data', d => opts.onLog?.(opts.tag, d.toString()));
   p.on('exit', (c, s) => opts.onLog?.(opts.tag, `[exit] code=${c} signal=${s}\n`));
@@ -38,10 +38,11 @@ function symlinkNoSpace(target: string): string {
   } catch { return target; }
 }
 function detectPM(repoPath: string) {
-  if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) return { cli: 'pnpm', runArgs: ['run'] as string[], yarn: false };
-  if (fs.existsSync(path.join(repoPath, 'yarn.lock')))      return { cli: 'yarn', runArgs: [] as string[], yarn: true };
+  const isWin = process.platform === 'win32';
+  if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) return { cli: isWin ? 'pnpm.cmd' : 'pnpm', runArgs: ['run'] as string[], yarn: false };
+  if (fs.existsSync(path.join(repoPath, 'yarn.lock')))      return { cli: isWin ? 'yarn.cmd' : 'yarn', runArgs: [] as string[], yarn: true };
   if (fs.existsSync(path.join(repoPath, 'bun.lockb')))      return { cli: 'bun',  runArgs: ['run'] as string[], yarn: false };
-  return { cli: 'npm', runArgs: ['run'] as string[], yarn: false };
+  return { cli: isWin ? 'npm.cmd' : 'npm', runArgs: ['run'] as string[], yarn: false };
 }
 function resolveDataSource(repoPath: string): string | null {
   const cands = [
@@ -76,7 +77,8 @@ export class ProcessManager {
       '-e', `CREATE DATABASE IF NOT EXISTS ${c.database} DEFAULT CHARACTER SET ${c.charset};`];
     const env = mergeEnv(opts.env);
     if (c.password) env.MYSQL_PWD = c.password;
-    this.ps.mysql = spawnSafe('mysql', args, { cwd: process.cwd(), env, stdio: 'pipe', tag: 'mysql', onLog: opts.onLog });
+    const mysqlCmd = process.platform === 'win32' ? 'mysql.exe' : 'mysql';
+    this.ps.mysql = spawnSafe(mysqlCmd, args, { cwd: process.cwd(), env, stdio: 'pipe', tag: 'mysql', onLog: opts.onLog });
     await new Promise<void>((res, rej) => this.ps.mysql!.on('exit', code => code === 0 ? res() : rej(new Error(`mysql exited ${code}`))));
   }
 
@@ -91,7 +93,8 @@ export class ProcessManager {
       ? ['ts-node', '-r', 'tsconfig-paths/register', 'node_modules/typeorm/cli.js', 'migration:run', '-d', ds]
       : ['typeorm', 'migration:run', '-d', ds];
 
-    this.ps.migrations = spawnSafe('npx', args, { cwd: repoCwd, env: mergeEnv(opts.env), stdio: 'pipe', tag: 'migrations', onLog: opts.onLog });
+    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    this.ps.migrations = spawnSafe(npxCmd, args, { cwd: repoCwd, env: mergeEnv(opts.env), stdio: 'pipe', tag: 'migrations', onLog: opts.onLog });
     await new Promise<void>((res, rej) => this.ps.migrations!.on('exit', code => code === 0 ? res() : rej(new Error(`migrations exit ${code}`))));
   }
 
