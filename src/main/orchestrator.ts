@@ -318,6 +318,62 @@ export class Orchestrator {
     }
   }
 
+  private async ensureHostsEntries(notify?: (s: LaunchStatus) => void) {
+    if (process.platform !== 'win32') return;
+
+    this.log('[hosts] Checking/updating hosts file for local domains...', notify);
+
+    const psScript = `
+      $hostsFile = \"$env:SystemRoot\\System32\\drivers\\etc\\hosts\"
+      $entries = @{
+          \"student.localhost\" = \"127.0.0.1\";
+          \"admin.localhost\" = \"127.0.0.1\"
+      }
+
+      try {
+        $content = Get-Content $hostsFile
+      } catch {
+        $content = @()
+      }
+      
+      $toAdd = @()
+
+      foreach ($hostname in $entries.Keys) {
+          $found = $false
+          foreach ($line in $content) {
+              if ($line -notmatch '^\\s*#' -and $line -match \"\\s$hostname(\\s|$)\") {
+                  $found = $true
+                  break
+              }
+          }
+          if (-not $found) {
+              $ip = $entries[$hostname]
+              $toAdd += \"$ip`t$hostname\"
+          }
+      }
+
+      if ($toAdd.Count -gt 0) {
+          $currentRawContent = Get-Content $hostsFile -Raw -ErrorAction SilentlyContinue
+          if ($currentRawContent -and $currentRawContent -notmatch \"\r?\n$\") {
+              Add-Content -Path $hostsFile -Value \"\"
+          }
+          $toAdd | Add-Content -Path $hostsFile
+          Write-Host \"Updated hosts file with $($toAdd.Count) entries.\"
+      } else {
+          Write-Host \"Hosts file already contains necessary entries.\"
+      }
+    `;
+
+    try {
+      const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
+      await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript]);
+      this.log('[hosts] Hosts file check/update process completed.', notify);
+    } catch (e: any) {
+      this.log(`[hosts] Failed to automatically update hosts file. Error: ${e?.message || e}`, notify);
+      this.log('[hosts] You may need to add the entries manually for the frontend to work.', notify);
+    }
+  }
+
   // ---------- DB 준비 (MySQL) ----------
   private async createDatabaseIfNeeded(db: {host:string;port:number;user:string;password:string;database:string}, notify?: (s: LaunchStatus)=>void) {
     const args = ['-h', db.host, '-P', String(db.port), '-u', db.user]
@@ -393,6 +449,9 @@ export class Orchestrator {
 
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
+
+      // Windows: hosts 파일 설정
+      await this.ensureHostsEntries(notify)
 
       // 환경 변수 수집
       const envFromFiles = this.loadServerEnv(serverDir)
