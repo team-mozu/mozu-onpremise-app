@@ -16,11 +16,7 @@ export class Orchestrator {
 
   constructor(app: App) {
     this.app = app
-    if (process.platform === 'win32') {
-      this.workspace = 'C:\\mozu-onpremise-workspace'
-    } else {
-      this.workspace = path.join(this.app.getPath('userData'), 'workspace')
-    }
+    this.workspace = path.join(this.app.getPath('userData'), 'workspace')
   }
 
   // ---------- utils ----------
