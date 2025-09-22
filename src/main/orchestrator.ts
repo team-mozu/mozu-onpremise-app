@@ -376,6 +376,11 @@ export class Orchestrator {
       await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
 
       this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
+
+      // Clean up node_modules to ensure a clean install, especially for PnP projects
+      this.log('[deps] Cleaning up existing node_modules directories...', notify);
+      fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
+      fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
       await this.installDeps(serverDir, config.server.installCommand, notify)
       await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
