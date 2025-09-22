@@ -352,8 +352,9 @@ export class Orchestrator {
         const [c, ...args] = requested.split(' ')
         return { cmd: c, args, label: 'requested' }
       }
-      if (pkg.scripts?.['start:dev']) return { cmd: this.npmCmd(), args: ['run', 'start:dev'], label: 'npm run start:dev' }
-      if (pkg.scripts?.['start']) return { cmd: this.npmCmd(), args: ['run', 'start'], label: 'npm run start' }
+      const pm = this.detectPM(targetDir).pm;
+      if (pkg.scripts?.['start:dev']) return { cmd: pm, args: ['run', 'start:dev'], label: `${pm} run start:dev` }
+      if (pkg.scripts?.['start']) return { cmd: pm, args: ['run', 'start'], label: `${pm} run start` }
     }
     // fallback: 로컬 nest → npx nest
     const localNest = this.localBin(targetDir, 'nest')
