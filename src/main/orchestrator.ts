@@ -305,7 +305,8 @@ export class Orchestrator {
       try {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
         const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
-        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', startSvc]);
+        const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
+        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
         this.log('[mysql] service start command issued (if installed and not running).', notify)
       } catch (e: any) {
         this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
