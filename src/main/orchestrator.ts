@@ -115,7 +115,9 @@ export class Orchestrator {
         this.log('[java] Trying to install Microsoft OpenJDK 17 via winget...', notify);
         await this.execElevated('winget', ['install', '-e', '--id', 'Microsoft.OpenJDK.17', '--silent', '--accept-package-agreements'], notify);
         this.log('[java] Winget installation command finished. Please restart the application to apply changes.', notify);
-        return; // Assume success and prompt user to restart
+        await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+        this.log('[java] JDK successfully installed via winget.', notify);
+        return; // Success
       } catch (err: any) {
         this.log(`[java] Winget installation failed: ${err?.message || err}`, notify);
       }
@@ -134,7 +136,9 @@ export class Orchestrator {
         this.log('[java] Trying to install OpenJDK 17 via Chocolatey...', notify);
         await this.execElevated('choco', ['install', 'openjdk17', '-y', '--no-progress'], notify);
         this.log('[java] Chocolatey installation command finished. Please restart the application to apply changes.', notify);
-        return; // Assume success and prompt user to restart
+        await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+        this.log('[java] JDK successfully installed via choco.', notify);
+        return; // Success
       } catch (err: any) {
         this.log(`[java] Chocolatey installation failed: ${err?.message || err}`, notify);
       }
