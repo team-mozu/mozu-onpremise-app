@@ -13,7 +13,6 @@ export class Orchestrator {
   private status: LaunchStatus = { step: 'idle', logs: [] }
   private server: Proc | null = null
   private frontend: Proc | null = null
-  private discoveredJavaHome: string | null = null;
 
   constructor(app: App) {
     this.app = app
@@ -34,23 +33,6 @@ export class Orchestrator {
   }
 
   // ---------- utils ----------
-  private async execAndGetOutput(cmd: string, args: string[], opts: any = {}): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const p = spawn(cmd, args, { shell: false, ...opts });
-        let stdout = '';
-        let stderr = '';
-        p.stdout?.on('data', (d) => stdout += d.toString());
-        p.stderr?.on('data', (d) => stderr += d.toString());
-        p.on('error', reject);
-        p.on('exit', (code) => {
-            if (code === 0) {
-                resolve(stdout);
-            } else {
-                reject(new Error(`'${cmd}' exited with code ${code}. Stderr: ${stderr}`));
-            }
-        });
-    });
-  }
   private envWithDefaultPath(extraEnv: Record<string,string> = {}) {
     const extraPath = process.platform === 'darwin'
       ? ['/opt/homebrew/bin', '/usr/local/bin']
@@ -109,138 +91,17 @@ export class Orchestrator {
   }
 
   // ---------- preflight ----------
-  private async execElevated(cmd: string, args: string[], notify?: (s: LaunchStatus) => void) {
-    if (process.platform !== 'win32') return;
-    const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-    const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
-    await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
-  }
-
-  private async installJavaOnWindows(notify?: (s: LaunchStatus) => void) {
-    this.log('[java] JDK not found. Attempting to install automatically...', notify);
-    this.log('[java] This may take a few minutes. Please wait...', notify);
-    
-    let wingetOk = false;
-    try {
-      await this.execChecked('winget', ['--version'], { stdio: 'ignore' });
-      wingetOk = true;
-    } catch {
-      this.log('[java] winget package manager not found, skipping.', notify);
-    }
-
-    if (wingetOk) {
-      try {
-        this.log('[java] Trying to install Microsoft OpenJDK 17 via winget...', notify);
-        await this.execElevated('winget', ['install', '-e', '--id', 'Microsoft.OpenJDK.17', '--silent', '--accept-package-agreements'], notify);
-        this.log('[java] Winget installation command finished. Please restart the application to apply changes.', notify);
-        return; // Assume success and prompt user to restart
-      } catch (err: any) {
-        this.log(`[java] Winget installation failed: ${err?.message || err}`, notify);
-      }
-    }
-
-    let chocoOk = false;
-    try {
-      await this.execChecked('choco', ['--version'], { stdio: 'ignore' });
-      chocoOk = true;
-    } catch {
-      this.log('[java] Chocolatey package manager not found, skipping.', notify);
-    }
-
-    if (chocoOk) {
-      try {
-        this.log('[java] Trying to install OpenJDK 17 via Chocolatey...', notify);
-        await this.execElevated('choco', ['install', 'openjdk17', '-y', '--no-progress'], notify);
-        this.log('[java] Chocolatey installation command finished. Please restart the application to apply changes.', notify);
-        return; // Assume success and prompt user to restart
-      } catch (err: any) {
-        this.log(`[java] Chocolatey installation failed: ${err?.message || err}`, notify);
-      }
-    }
-
-    throw new Error('Automatic JDK installation failed. For automatic installation, please install winget or Chocolatey. Alternatively, install Java (JDK 17) manually and ensure it is in your PATH.');
-  }
-
   private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
-      await this.execChecked('git', ['--version'], { shell: true })
+      await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      await this.execChecked('java', ['-version'], { shell: true })
-      this.log('[java] Found java in PATH, proceeding.', notify);
+      // Java(JDK) 설치 여부 확인
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
-      if (process.platform === 'win32') {
-        try {
-          this.log('[java] `java -version` failed. Trying to find a valid JDK in PATH...', notify);
-          const whereResult = await this.execAndGetOutput('where', ['java']);
-          // `where` can return multiple paths, let's check them all for a valid JDK
-          const candidatePaths = whereResult.split(/\r?\n/).filter(p => p.trim());
-          for (const javaPath of candidatePaths) {
-            if (fs.existsSync(javaPath)) {
-              const binPath = path.dirname(javaPath);
-              const javacPath = path.join(binPath, 'javac.exe');
-              if (fs.existsSync(javacPath)) {
-                // Found a JDK
-                this.log(`[java] Found valid JDK at: ${binPath}`, notify);
-                const javaHome = path.dirname(binPath);
-                this.log(`[java] Inferred JAVA_HOME: ${javaHome}`, notify);
-                this.discoveredJavaHome = javaHome;
-                // Re-run the check with the discovered home to be sure
-                await this.execChecked(path.join(binPath, 'java'), ['-version'], { shell: false, env: { ...process.env, JAVA_HOME: this.discoveredJavaHome } });
-                this.log('[java] Java check successful with discovered JAVA_HOME.', notify);
-                return; // Exit the whole ensureTools function
-              }
-            }
-          }
-          // If loop finishes without returning, no valid JDK was found
-          this.log('[java] No valid JDK found in PATH. Proceeding to auto-install.', notify);
-        } catch (findErr) {
-            this.log('[java] Failed to find java.exe with `where` command. Proceeding to auto-install.', notify);
-        }
-        await this.installJavaOnWindows(notify);
-
-        this.log('[java] Installation finished. Searching for java.exe...', notify);
-        let discoveredHome: string | null = null;
-        try {
-            const psCommand = `
-              $searchPaths = @("C:\\Program Files\\Microsoft", "C:\\Program Files\\Java", "C:\\Program Files (x86)\\Java");
-              foreach ($p in $searchPaths) {
-                if (Test-Path $p) {
-                  $javaPath = Get-ChildItem -Path $p -Recurse -Filter "java.exe" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.FullName -like '*jdk*\\bin\\java.exe' } |
-                    Select-Object -First 1;
-                  if ($javaPath) {
-                    Write-Output $javaPath.Directory.Parent.FullName;
-                    break;
-                  }
-                }
-              }
-            `;
-            const encodedPsCommand = Buffer.from(psCommand, 'utf16le').toString('base64');
-            const psOutput = await this.execAndGetOutput('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedPsCommand]);
-            const javaHome = psOutput.trim();
-            if (javaHome && fs.existsSync(javaHome)) {
-                this.log(`[java] Found JDK at: ${javaHome}`, notify);
-                discoveredHome = javaHome;
-            }
-        } catch (searchErr) {
-            this.log(`[java] Failed to search for JDK after installation: ${searchErr}`, notify);
-        }
-
-        if (discoveredHome) {
-            this.discoveredJavaHome = discoveredHome;
-            this.log('[java] Verifying the newly installed Java...', notify);
-            await this.execChecked('java', ['-version'], { shell: true, env: { JAVA_HOME: this.discoveredJavaHome } });
-            this.log('[java] Verification successful. Proceeding with launch.', notify);
-            return;
-        } else {
-            throw new Error('Java 자동 설치를 시도했지만, 설치 경로를 찾을 수 없습니다. 수동으로 Java 17 (JDK)를 설치하고 PATH를 설정해주세요.');
-        }
-      } else {
-        throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
-      }
+      throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
     }
   }
 
@@ -338,11 +199,7 @@ export class Orchestrator {
       }
     }
     this.log(`[deps] ${gradlew} build @ server`, notify)
-    const env: Record<string, string> = {};
-    if (this.discoveredJavaHome) {
-        env.JAVA_HOME = this.discoveredJavaHome;
-    }
-    await this.execStream(gradlew, ['build', '--no-daemon'], targetDir, notify, true, env)
+    await this.execStream(gradlew, ['build', '--no-daemon'], targetDir, notify, true)
   }
 
   private async installFrontendDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
@@ -368,6 +225,12 @@ export class Orchestrator {
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
 
+    const execElevated = async (cmd: string, args: string[]) => {
+      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
+      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
+      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
+    }
+
     let hasMysql = false
     try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
     if (hasMysql) {
@@ -381,7 +244,7 @@ export class Orchestrator {
         for (const [id, extra] of candidates) {
           try {
             this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
-            await this.execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], notify);
+            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
             try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
             if (hasMysql) {
               this.log(`[mysql] Successfully installed ${id} via winget.`, notify);
@@ -398,7 +261,7 @@ export class Orchestrator {
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            await this.execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""'], notify);
+            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
               hasMysql = true;
@@ -421,7 +284,7 @@ export class Orchestrator {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
         const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
         const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
-        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
+        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
         this.log('[mysql] service start command issued (if installed and not running).', notify)
       } catch (e: any) {
         this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
@@ -529,12 +392,8 @@ export class Orchestrator {
       // 서버 시작 (환경변수 주입 없이)
       const srv = await this.resolveStartCommand(serverDir, 'server', config.server.startCommand)
       this.log(`[start] server via ${srv.label}`, notify)
-      const spawnEnv: Record<string, string | undefined> = this.envWithDefaultPath();
-      if (this.discoveredJavaHome) {
-          spawnEnv.JAVA_HOME = this.discoveredJavaHome;
-      }
       this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: spawnEnv }),
+        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: this.envWithDefaultPath() }),
         cwd: serverDir
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
