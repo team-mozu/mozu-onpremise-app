@@ -91,6 +91,44 @@ export class Orchestrator {
   }
 
   // ---------- preflight ----------
+  private async execElevated(cmd: string, args: string[], notify?: (s: LaunchStatus) => void) {
+    if (process.platform !== 'win32') return;
+    const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
+    const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
+    await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
+  }
+
+  private async installJavaOnWindows(notify?: (s: LaunchStatus) => void) {
+    this.log('[java] JDK not found. Attempting to install automatically...', notify);
+    this.log('[java] This may take a few minutes. Please wait...', notify);
+    
+    // 1. Try with winget
+    try {
+      this.log('[java] Trying to install Microsoft OpenJDK 17 via winget...', notify);
+      await this.execElevated('winget', ['install', '-e', '--id', 'Microsoft.OpenJDK.17', '--silent', '--accept-package-agreements'], notify);
+      this.log('[java] Winget installation command finished. Please restart the application to apply changes.', notify);
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+      this.log('[java] JDK successfully installed via winget.', notify);
+      return;
+    } catch (err: any) {
+      this.log(`[java] Winget installation failed: ${err?.message || err}`, notify);
+    }
+
+    // 2. Fallback to choco
+    try {
+      this.log('[java] Trying to install OpenJDK 17 via Chocolatey...', notify);
+      await this.execElevated('choco', ['install', 'openjdk17', '-y', '--no-progress'], notify);
+      this.log('[java] Chocolatey installation command finished. Please restart the application to apply changes.', notify);
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+      this.log('[java] JDK successfully installed via choco.', notify);
+      return;
+    } catch (err: any) {
+      this.log(`[java] Chocolatey installation failed: ${err?.message || err}`, notify);
+    }
+
+    throw new Error('Automatic JDK installation failed. Please install Java (JDK 17) manually and ensure it is in your PATH.');
+  }
+
   private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
       await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
@@ -98,10 +136,13 @@ export class Orchestrator {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      // Java(JDK) 설치 여부 확인
       await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
-      throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
+      if (process.platform === 'win32') {
+        await this.installJavaOnWindows(notify);
+      } else {
+        throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
+      }
     }
   }
 
@@ -225,12 +266,6 @@ export class Orchestrator {
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
 
-    const execElevated = async (cmd: string, args: string[]) => {
-      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
-      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
-    }
-
     let hasMysql = false
     try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
     if (hasMysql) {
@@ -244,7 +279,7 @@ export class Orchestrator {
         for (const [id, extra] of candidates) {
           try {
             this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
-            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
+            await this.execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], notify);
             try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
             if (hasMysql) {
               this.log(`[mysql] Successfully installed ${id} via winget.`, notify);
@@ -261,7 +296,7 @@ export class Orchestrator {
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
+            await this.execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""'], notify);
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
               hasMysql = true;
@@ -284,7 +319,7 @@ export class Orchestrator {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
         const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
         const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
-        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
+        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
         this.log('[mysql] service start command issued (if installed and not running).', notify)
       } catch (e: any) {
         this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
