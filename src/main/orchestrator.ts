@@ -102,59 +102,41 @@ export class Orchestrator {
     this.log('[java] JDK not found. Attempting to install automatically...', notify);
     this.log('[java] This may take a few minutes. Please wait...', notify);
     
-    let wingetOk = false;
+    // 1. Try with winget
     try {
-      await this.execChecked('winget', ['--version'], { stdio: 'ignore' });
-      wingetOk = true;
-    } catch {
-      this.log('[java] winget package manager not found, skipping.', notify);
+      this.log('[java] Trying to install Microsoft OpenJDK 17 via winget...', notify);
+      await this.execElevated('winget', ['install', '-e', '--id', 'Microsoft.OpenJDK.17', '--silent', '--accept-package-agreements'], notify);
+      this.log('[java] Winget installation command finished. Please restart the application to apply changes.', notify);
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+      this.log('[java] JDK successfully installed via winget.', notify);
+      return;
+    } catch (err: any) {
+      this.log(`[java] Winget installation failed: ${err?.message || err}`, notify);
     }
 
-    if (wingetOk) {
-      try {
-        this.log('[java] Trying to install Microsoft OpenJDK 17 via winget...', notify);
-        await this.execElevated('winget', ['install', '-e', '--id', 'Microsoft.OpenJDK.17', '--silent', '--accept-package-agreements'], notify);
-        this.log('[java] Winget installation command finished. Please restart the application to apply changes.', notify);
-        await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
-        this.log('[java] JDK successfully installed via winget.', notify);
-        return; // Success
-      } catch (err: any) {
-        this.log(`[java] Winget installation failed: ${err?.message || err}`, notify);
-      }
-    }
-
-    let chocoOk = false;
+    // 2. Fallback to choco
     try {
-      await this.execChecked('choco', ['--version'], { stdio: 'ignore' });
-      chocoOk = true;
-    } catch {
-      this.log('[java] Chocolatey package manager not found, skipping.', notify);
+      this.log('[java] Trying to install OpenJDK 17 via Chocolatey...', notify);
+      await this.execElevated('choco', ['install', 'openjdk17', '-y', '--no-progress'], notify);
+      this.log('[java] Chocolatey installation command finished. Please restart the application to apply changes.', notify);
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
+      this.log('[java] JDK successfully installed via choco.', notify);
+      return;
+    } catch (err: any) {
+      this.log(`[java] Chocolatey installation failed: ${err?.message || err}`, notify);
     }
 
-    if (chocoOk) {
-      try {
-        this.log('[java] Trying to install OpenJDK 17 via Chocolatey...', notify);
-        await this.execElevated('choco', ['install', 'openjdk17', '-y', '--no-progress'], notify);
-        this.log('[java] Chocolatey installation command finished. Please restart the application to apply changes.', notify);
-        await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() });
-        this.log('[java] JDK successfully installed via choco.', notify);
-        return; // Success
-      } catch (err: any) {
-        this.log(`[java] Chocolatey installation failed: ${err?.message || err}`, notify);
-      }
-    }
-
-    throw new Error('Automatic JDK installation failed. For automatic installation, please install winget or Chocolatey. Alternatively, install Java (JDK 17) manually and ensure it is in your PATH.');
+    throw new Error('Automatic JDK installation failed. Please install Java (JDK 17) manually and ensure it is in your PATH.');
   }
 
   private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
-      await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath(), shell: true })
+      await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath(), shell: true })
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
       if (process.platform === 'win32') {
         await this.installJavaOnWindows(notify);
