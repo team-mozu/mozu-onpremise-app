@@ -189,6 +189,7 @@ export class Orchestrator {
             this.log('[java] Failed to find java.exe with `where` command. Proceeding to auto-install.', notify);
         }
         await this.installJavaOnWindows(notify);
+        throw new Error('Java (JDK)가 설치되었습니다. 프로그램을 다시 시작하여 계속 진행해주세요.');
       } else {
         throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
       }
