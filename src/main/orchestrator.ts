@@ -23,6 +23,15 @@ export class Orchestrator {
     }
   }
 
+  private toSpringEnv(env: Record<string, string>): Record<string, string> {
+    const springEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env)) {
+        const newKey = key.toUpperCase().replace(/[.-]/g, '_');
+        springEnv[newKey] = value;
+    }
+    return springEnv;
+  }
+
   // ---------- utils ----------
   private envWithDefaultPath(extraEnv: Record<string,string> = {}) {
     const extraPath = process.platform === 'darwin'
@@ -89,21 +98,10 @@ export class Orchestrator {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      await this.execChecked(this.npmCmd(), ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() })
+      // Java(JDK) 설치 여부 확인
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
-      throw new Error('npm이 설치되지 않았거나 PATH에 없습니다. Node.js와 npm을 설치하고 다시 시도하세요.')
-    }
-    try {
-      await this.execChecked('yarn', ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() });
-    } catch (err) {
-      this.log('[tools] yarn not found. Attempting to install globally via npm...', notify);
-      try {
-        await this.execStream(this.npmCmd(), ['install', '-g', 'yarn'], os.homedir(), notify, true);
-        this.log('[tools] yarn has been installed globally.', notify);
-      } catch (installErr) {
-        this.log('[tools] Failed to install yarn globally.', notify);
-        throw new Error('yarn을 찾을 수 없으며, npm을 통해 전역으로 설치하는 데에도 실패했습니다. 수동으로 yarn을 설치하고 다시 시도하세요.');
-      }
+      throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
     }
   }
 
@@ -134,7 +132,7 @@ export class Orchestrator {
   // ---------- env util ----------
   private parseDotEnv(text: string): Record<string,string> {
     const out: Record<string,string> = {}
-    for (const raw of text.split(/\r?\n/)) {
+    for (const raw of text.split(/\\r?\\n/)) {
       const line = raw.trim()
       if (!line || line.startsWith('#')) continue
       const eq = line.indexOf('=')
@@ -149,16 +147,16 @@ export class Orchestrator {
     return out
   }
   private stringifyDotEnv(obj: Record<string,string>): string {
-    return Object.entries(obj).map(([k,v]) => `${k}=${/[\s#'"`]/.test(v) ? JSON.stringify(v) : v}`).join('\n') + '\n'
+    return Object.entries(obj).map(([k,v]) => `${k}=${/[\\s#'"`]/.test(v) ? JSON.stringify(v) : v}`).join('\\n') + '\\n'
   }
   private loadServerEnv(serverDir: string): Record<string,string> {
     // 우선순위: launcher.env.json(workspace) > .env.local > .env.development > .env
     const env: Record<string,string> = {}
     const candidates = [
-      path.join(this.workspace, 'launcher.env.json'),
-      path.join(serverDir, '.env.local'),
-      path.join(serverDir, '.env.development'),
+      path.join(serverDir, 'src', 'main', 'resources', 'application.properties'),
       path.join(serverDir, '.env'),
+      path.join(this.workspace, 'launcher.env.json'),
+      path.join(this.app.getAppPath(), '.env'),
     ]
     for (const fp of candidates) {
       if (fp.endsWith('.json')) {
@@ -190,7 +188,21 @@ export class Orchestrator {
   }
 
   // ---------- deps ----------
-  private async installDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
+  private async installServerDeps(targetDir: string, notify?: (s: LaunchStatus) => void) {
+    const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
+    // gradlew에 실행 권한 부여 (macOS/Linux)
+    if (process.platform !== 'win32') {
+      try {
+        await this.execStream('chmod', ['+x', 'gradlew'], targetDir, notify)
+      } catch (err) {
+        this.log(`[warn] Failed to chmod +x gradlew: ${err}`, notify)
+      }
+    }
+    this.log(`[deps] ${gradlew} build @ server`, notify)
+    await this.execStream(gradlew, ['build', '--no-daemon'], targetDir, notify, true)
+  }
+
+  private async installFrontendDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
     let cmd = installCommand
     if (cmd?.trim().startsWith('yarn')) {
       cmd = 'corepack yarn install';
@@ -209,63 +221,30 @@ export class Orchestrator {
     await this.execStream(c, args, targetDir, notify, true)
   }
 
-  // 추가 의존성: Nest/TypeORM/mysql2, Nest CLI
-  private async ensureServerExtras(serverDir: string, notify?: (s: LaunchStatus) => void) {
-    const pkg = this.readJsonIfExists(path.join(serverDir, 'package.json')) || { dependencies:{}, devDependencies:{} }
-    const deps = pkg.dependencies || {}
-    const devDeps = pkg.devDependencies || {}
-    const needRuntime = ['@nestjs/typeorm','typeorm','mysql2'].filter(lib => !deps[lib] && !devDeps[lib])
-    const needDev = ['@nestjs/cli'].filter(lib => !deps[lib] && !devDeps[lib])
-    const pm = this.detectPM(serverDir)
-    if (needRuntime.length) {
-      const [bin, base] = pm.addCmd(false)
-      this.log(`[deps-extra] ${needRuntime.join(' ')} @ server`, notify)
-      await this.execStream(bin, [...base, ...needRuntime], serverDir, notify, true)
-    } else {
-      this.log('[deps-extra] runtime OK (@nestjs/typeorm, typeorm, mysql2)', notify)
-    }
-    if (needDev.length) {
-      const [bin, base] = pm.addCmd(true)
-      this.log(`[deps-extra] -D ${needDev.join(' ')} @ server`, notify)
-      await this.execStream(bin, [...base, ...needDev], serverDir, notify, true)
-    } else {
-      this.log('[deps-extra] dev OK (@nestjs/cli)', notify)
-    }
-  }
-
   // ---------- Windows: MySQL 설치 / 서비스 시작 ----------
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
 
     const execElevated = async (cmd: string, args: string[]) => {
       const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-      // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
-      // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
       const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
-      
       await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
     }
 
-    // mysql 클라이언트 존재 확인
     let hasMysql = false
     try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
     if (hasMysql) {
       this.log('[mysql] MySQL is already installed.', notify)
     } else {
       this.log('[mysql] not found. trying to install via winget with elevation...', notify)
-      // winget
       let wingetOk = false
       try { await this.execChecked('winget', ['--version'], { env: this.envWithDefaultPath() }); wingetOk = true } catch {}
       if (wingetOk) {
-        const candidates = [
-          ['Oracle.MySQL', []],
-          ['Oracle.MySQLServer', []],
-        ] as const
+        const candidates = [['Oracle.MySQL', []], ['Oracle.MySQLServer', []]] as const
         for (const [id, extra] of candidates) {
           try {
             this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
             await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
-            // 설치 후 다시 확인
             try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
             if (hasMysql) {
               this.log(`[mysql] Successfully installed ${id} via winget.`, notify);
@@ -276,22 +255,18 @@ export class Orchestrator {
           }
         }
       }
-      // choco fallback
       if (!hasMysql) {
         this.log('[mysql] winget failed. Trying Chocolatey with elevation...', notify)
         let chocoOk = false
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
             await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
-            // 설치 성공 여부를 직접 확인
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
               hasMysql = true;
               this.log(`[mysql] Successfully installed via choco.`, notify);
             } catch {
-              // 'where mysql' 명령이 실패하면, choco 설치가 실제로는 실패한 것으로 간주
               throw new Error("'choco install' command finished, but 'mysql.exe' was not found in PATH.");
             }
           } catch (e: any) {
@@ -304,7 +279,6 @@ export class Orchestrator {
       }
     }
 
-    // 서비스 시작 시도 (관리자 권한으로)
     if (hasMysql) {
       try {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
@@ -331,25 +305,21 @@ export class Orchestrator {
         throw new Error('`mysql` 명령어를 찾을 수 없습니다. MySQL을 설치하고, 설치 경로의 `bin` 폴더를 시스템 환경 변수 PATH에 추가했는지 확인하세요.')
       }
       this.log(`[mysql] DB 생성 실패: ${e?.message || e}`, notify)
-      // 계속 진행은 하지만 서버가 접속 실패할 수 있음
     }
   }
 
   // ---------- start commands ----------
-  private localBin(cwd: string, binName: string) {
-    const name = process.platform === 'win32' ? `${binName}.cmd` : binName
-    const p = path.join(cwd, 'node_modules', '.bin', name)
-    return fs.existsSync(p) ? p : null
-  }
-
-  private async resolveStartCommand(targetDir: string, requested?: string): Promise<{ cmd: string; args: string[]; label: string }> {
-    // 사용자가 nest start를 원한다면: 로컬 nest → npx nest
-    if (requested && /^nest(\.cmd)?\s+start(\b|$)/.test(requested)) {
-      const localNest = this.localBin(targetDir, 'nest')
-      if (localNest) return { cmd: localNest, args: ['start', '--watch'], label: 'local nest' }
-      return { cmd: 'npx', args: ['nest', 'start', '--watch'], label: 'npx nest' }
+  private async resolveStartCommand(
+    targetDir: string,
+    type: 'server' | 'frontend',
+    requested?: string
+  ): Promise<{ cmd: string; args: string[]; label: string }> {
+    if (type === 'server') {
+      const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
+      return { cmd: gradlew, args: ['bootRun'], label: 'gradlew bootRun' }
     }
-    // package.json scripts
+
+    // Frontend (Node.js based)
     const pkg = this.readJsonIfExists(path.join(targetDir, 'package.json'))
     if (pkg) {
       if (requested && requested.trim()) {
@@ -358,18 +328,19 @@ export class Orchestrator {
       }
       const pm = this.detectPM(targetDir).pm;
       if (pkg.scripts?.['start:dev']) return { cmd: pm, args: ['run', 'start:dev'], label: `${pm} run start:dev` }
+      if (pkg.scripts?.['dev']) return { cmd: pm, args: ['run', 'dev'], label: `${pm} run dev` }
       if (pkg.scripts?.['start']) return { cmd: pm, args: ['run', 'start'], label: `${pm} run start` }
     }
-    // fallback: 로컬 nest → npx nest
-    const localNest = this.localBin(targetDir, 'nest')
-    if (localNest) return { cmd: localNest, args: ['start', '--watch'], label: 'local nest (fallback)' }
-    return { cmd: 'npx', args: ['nest', 'start', '--watch'], label: 'npx nest (fallback)' }
+    // Fallback for frontend
+    return { cmd: 'npm', args: ['run', 'dev'], label: 'npm run dev (fallback)' }
   }
+
+
 
   // ---------- main flow ----------
   async start(config: RepoConfig, notify?: (s: LaunchStatus) => void) {
     try {
-      this.update({ step: 'checking-tools', message: 'Checking git and npm...' }, notify)
+      this.update({ step: 'checking-tools', message: 'Checking git and java...' }, notify)
       await this.ensureTools()
 
       this.update({ step: 'preparing', message: 'Preparing workspace...' }, notify)
@@ -381,48 +352,48 @@ export class Orchestrator {
 
       this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
 
-      // Clean up node_modules to ensure a clean install, especially for PnP projects
-      this.log('[deps] Cleaning up existing node_modules directories...', notify);
-      fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
+      // Clean up node_modules for frontend to ensure a clean install
+      this.log('[deps] Cleaning up existing node_modules directory for frontend...', notify);
       fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
-      await this.installDeps(serverDir, config.server.installCommand, notify)
-      await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
-      // 서버 런타임/CLI 보강
-      await this.ensureServerExtras(serverDir, notify)
+      await this.installServerDeps(serverDir, notify)
+      await this.installFrontendDeps(frontDir, config.frontend.installCommand, notify)
 
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
 
-      // 환경 변수 수집
-      const envFromFiles = this.loadServerEnv(serverDir)
-      const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
-      const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
-      const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
-      // UI에서 받은 비밀번호를 최우선으로 사용하고, 그 다음 .env 파일, 마지막으로 빈 문자열을 사용
-      const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
-      const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
+      // 루트 .env 파일을 읽어 DB 생성에 필요한 정보 파싱
+      const rootEnvPath = path.join(this.app.getAppPath(), '.env');
+      const envFromRoot = fs.existsSync(rootEnvPath) ? this.parseDotEnv(fs.readFileSync(rootEnvPath, 'utf-8')) : {};
 
+      const jdbcUrl = envFromRoot['SPRING_DATASOURCE_URL'] || '';
+      const dbHost = jdbcUrl.match(/\/\/([^:/]+)/)?.[1] || '127.0.0.1';
+      const dbPort = Number(jdbcUrl.match(/:(\d+)\//)?.[1] || 3306);
+      const dbUser = envFromRoot['SPRING_DATASOURCE_USERNAME'] || 'root';
+      const dbPass = config.server.dbPassword || envFromRoot['SPRING_DATASOURCE_PASSWORD'] || '';
+      let dbName = 'mozu';
+      const pathPart = jdbcUrl.split('?')[0];
+      const lastSlash = pathPart.lastIndexOf('/');
+      if (lastSlash !== -1 && lastSlash < pathPart.length -1) {
+          dbName = pathPart.substring(lastSlash + 1);
+      }
+      
       // DB 생성 시도
       await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
 
-      // .env 병합/기록 (TypeORM에서 자주 쓰는 키 + DATABASE_URL)
-      const databaseUrl = `mysql://${encodeURIComponent(dbUser)}:${encodeURIComponent(dbPass)}@${dbHost}:${dbPort}/${dbName}`
-      this.mergeWriteEnv(serverDir, {
-        DB_HOST: dbHost,
-        DB_PORT: String(dbPort),
-        DB_NAME: dbUser,
-        DB_PASSWORD: dbPass,
-        DB_DATABASE: dbName,
-      }, notify)
+      // 루트 .env 파일을 서버 디렉토리로 복사
+      if (fs.existsSync(rootEnvPath)) {
+        fs.copyFileSync(rootEnvPath, path.join(serverDir, '.env'));
+        this.log(`[env] Copied root .env to server directory.`, notify);
+      }
 
       this.update({ step: 'starting', message: 'Starting processes...' }, notify)
 
-      // 서버 시작
-      const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
+      // 서버 시작 (환경변수 주입 없이)
+      const srv = await this.resolveStartCommand(serverDir, 'server', config.server.startCommand)
       this.log(`[start] server via ${srv.label}`, notify)
       this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: process.platform === 'win32', env: this.envWithDefaultPath(envFromFiles) }),
+        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: this.envWithDefaultPath() }),
         cwd: serverDir
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
@@ -430,10 +401,10 @@ export class Orchestrator {
       this.server.proc?.on('exit', (code, signal) => this.log(`[server] exited (code=${code}, signal=${signal})`, notify))
 
       // 프론트 시작
-      const fe = await this.resolveStartCommand(frontDir, config.frontend.startCommand)
+      const fe = await this.resolveStartCommand(frontDir, 'frontend', config.frontend.startCommand)
       this.log(`[start] frontend via ${fe.label}`, notify)
       this.frontend = {
-        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: process.platform === 'win32', env: this.envWithDefaultPath() }),
+        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: true, env: this.envWithDefaultPath() }),
         cwd: frontDir
       }
       this.frontend.proc?.stdout?.on('data', (d) => this.log(`[frontend] ${d.toString().trim()}`, notify))
