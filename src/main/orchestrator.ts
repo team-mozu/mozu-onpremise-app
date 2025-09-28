@@ -36,7 +36,7 @@ export class Orchestrator {
   // ---------- utils ----------
   private async execAndGetOutput(cmd: string, args: string[], opts: any = {}): Promise<string> {
     return new Promise((resolve, reject) => {
-        const p = spawn(cmd, args, { shell: true, ...opts });
+        const p = spawn(cmd, args, { shell: false, ...opts });
         let stdout = '';
         let stderr = '';
         p.stdout?.on('data', (d) => stdout += d.toString());
