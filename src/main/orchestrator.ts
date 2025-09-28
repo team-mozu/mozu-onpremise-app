@@ -173,29 +173,18 @@ export class Orchestrator {
     } catch (err) {
       if (process.platform === 'win32') {
         try {
-          this.log('[java] `java -version` failed. Trying to find a valid JDK in PATH...', notify);
+          this.log('[java] `java -version` failed. Trying to find java.exe path with `where` command...', notify);
           const whereResult = await this.execAndGetOutput('where', ['java']);
-          // `where` can return multiple paths, let's check them all for a valid JDK
-          const candidatePaths = whereResult.split(/\r?\n/).filter(p => p.trim());
-          for (const javaPath of candidatePaths) {
-            if (fs.existsSync(javaPath)) {
-              const binPath = path.dirname(javaPath);
-              const javacPath = path.join(binPath, 'javac.exe');
-              if (fs.existsSync(javacPath)) {
-                // Found a JDK
-                this.log(`[java] Found valid JDK at: ${binPath}`, notify);
-                const javaHome = path.dirname(binPath);
-                this.log(`[java] Inferred JAVA_HOME: ${javaHome}`, notify);
-                this.discoveredJavaHome = javaHome;
-                // Re-run the check with the discovered home to be sure
-                await this.execChecked(path.join(binPath, 'java'), ['-version'], { shell: false, env: { ...process.env, JAVA_HOME: this.discoveredJavaHome } });
-                this.log('[java] Java check successful with discovered JAVA_HOME.', notify);
-                return; // Exit the whole ensureTools function
-              }
-            }
+          const javaPath = whereResult.split(/\r?\n/)[0].trim();
+          if (javaPath && fs.existsSync(javaPath)) {
+              this.log(`[java] Found java.exe at: ${javaPath}`, notify);
+              const javaHome = path.dirname(path.dirname(javaPath));
+              this.log(`[java] Inferred JAVA_HOME: ${javaHome}`, notify);
+              this.discoveredJavaHome = javaHome;
+              await this.execChecked('java', ['-version'], { shell: true, env: { JAVA_HOME: this.discoveredJavaHome } });
+              this.log('[java] Java check successful with discovered JAVA_HOME.', notify);
+              return; 
           }
-          // If loop finishes without returning, no valid JDK was found
-          this.log('[java] No valid JDK found in PATH. Proceeding to auto-install.', notify);
         } catch (findErr) {
             this.log('[java] Failed to find java.exe with `where` command. Proceeding to auto-install.', notify);
         }
