@@ -207,7 +207,8 @@ export class Orchestrator {
                 }
               }
             `;
-            const psOutput = await this.execAndGetOutput('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand]);
+            const encodedPsCommand = Buffer.from(psCommand, 'utf16le').toString('base64');
+            const psOutput = await this.execAndGetOutput('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedPsCommand]);
             const javaHome = psOutput.trim();
             if (javaHome && fs.existsSync(javaHome)) {
                 this.log(`[java] Found JDK at: ${javaHome}`, notify);
