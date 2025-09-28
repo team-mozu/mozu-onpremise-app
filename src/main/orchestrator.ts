@@ -189,7 +189,43 @@ export class Orchestrator {
             this.log('[java] Failed to find java.exe with `where` command. Proceeding to auto-install.', notify);
         }
         await this.installJavaOnWindows(notify);
-        throw new Error('Java (JDK)가 설치되었습니다. 프로그램을 다시 시작하여 계속 진행해주세요.');
+
+        this.log('[java] Installation finished. Searching for java.exe...', notify);
+        let discoveredHome: string | null = null;
+        try {
+            const psCommand = `
+              $searchPaths = @("C:\\Program Files\\Microsoft", "C:\\Program Files\\Java", "C:\\Program Files (x86)\\Java");
+              foreach ($p in $searchPaths) {
+                if (Test-Path $p) {
+                  $javaPath = Get-ChildItem -Path $p -Recurse -Filter "java.exe" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -like '*jdk*\\bin\\java.exe' } |
+                    Select-Object -First 1;
+                  if ($javaPath) {
+                    Write-Output $javaPath.Directory.Parent.FullName;
+                    break;
+                  }
+                }
+              }
+            `;
+            const psOutput = await this.execAndGetOutput('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand]);
+            const javaHome = psOutput.trim();
+            if (javaHome && fs.existsSync(javaHome)) {
+                this.log(`[java] Found JDK at: ${javaHome}`, notify);
+                discoveredHome = javaHome;
+            }
+        } catch (searchErr) {
+            this.log(`[java] Failed to search for JDK after installation: ${searchErr}`, notify);
+        }
+
+        if (discoveredHome) {
+            this.discoveredJavaHome = discoveredHome;
+            this.log('[java] Verifying the newly installed Java...', notify);
+            await this.execChecked('java', ['-version'], { shell: true, env: { JAVA_HOME: this.discoveredJavaHome } });
+            this.log('[java] Verification successful. Proceeding with launch.', notify);
+            return;
+        } else {
+            throw new Error('Java 자동 설치를 시도했지만, 설치 경로를 찾을 수 없습니다. 수동으로 Java 17 (JDK)를 설치하고 PATH를 설정해주세요.');
+        }
       } else {
         throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
       }
