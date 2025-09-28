@@ -178,6 +178,66 @@ export class Orchestrator {
     this.log(`[env] wrote ${path.relative(serverDir, envPath)}`, notify)
   }
 
+  private async createFrontendEnvFiles(frontDir: string, notify?: (s: LaunchStatus) => void) {
+    this.log('[env] Creating .env files for frontend from root .env...', notify)
+
+    const getVar = (key: string, defaultValue: string = ''): string => {
+      return process.env[key] || defaultValue
+    }
+
+    const envFileContents: Record<string, string> = {
+      'packages/admin/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL', 'https://mozu-v2-stag.dsmhs.kr')}`,
+        `VITE_ADMIN_URL=${getVar('ADMIN_VITE_ADMIN_URL', 'http://localhost:3002/class-management')}`,
+        `VITE_ADMIN_AUTH_URL=${getVar('ADMIN_VITE_ADMIN_AUTH_URL', 'http://localhost:3002/signin')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('ADMIN_VITE_ADMIN_COOKIE_DOMAIN', 'admin.localhost')}`,
+        `BRANCH=${getVar('BRANCH', 'develop')}`,
+        `TEST_ID=${getVar('TEST_ID', 'tyler0922')}`,
+        `TEST_PW=${getVar('TEST_PW', '12341234')}`
+      ].join('\n'),
+
+      'packages/student/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL', 'https://mozu-v2-stag.dsmhs.kr')}`,
+        `VITE_STUDENT_URL=${getVar('STUDENT_VITE_STUDENT_URL', 'http://localhost:3001')}`,
+        `VITE_STUDENT_AUTH_URL=${getVar('STUDENT_VITE_STUDENT_AUTH_URL', 'http://localhost:3001/signin')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('STUDENT_VITE_STUDENT_COOKIE_DOMAIN', 'student.localhost')}`,
+        `BRANCH=${getVar('BRANCH', 'develop')}`
+      ].join('\n'),
+
+      'packages/ui/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL', 'https://mozu-v2-stag.dsmhs.kr')}`,
+        `VITE_ADMIN_URL=${getVar('UI_VITE_ADMIN_URL', 'http://localhost:3002')}`,
+        `VITE_ADMIN_AUTH_URL=${getVar('UI_VITE_ADMIN_AUTH_URL', 'http://localhost:3002/class-management')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('UI_VITE_ADMIN_COOKIE_DOMAIN', 'localhost')}`,
+        `VITE_STUDENT_URL=${getVar('UI_VITE_STUDENT_URL', 'http://192.168.1.6:3001')}`,
+        `VITE_STUDENT_AUTH_URL=${getVar('UI_VITE_STUDENT_AUTH_URL', 'http://192.168.1.6:3001/signin/wait')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('UI_VITE_STUDENT_COOKIE_DOMAIN', '192.168.1.6')}`
+      ].join('\n'),
+
+      'packages/util-config/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL', 'https://mozu-v2-stag.dsmhs.kr')}`,
+        `VITE_COOKIE_DOMAIN=${getVar('UTIL_VITE_COOKIE_DOMAIN', 'localhost')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('UTIL_VITE_ADMIN_COOKIE_DOMAIN', 'localhost')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('UTIL_VITE_STUDENT_COOKIE_DOMAIN', '192.168.1.6')}`
+      ].join('\n')
+    }
+
+    for (const [relativePath, content] of Object.entries(envFileContents)) {
+      try {
+        const fullPath = path.join(frontDir, relativePath)
+        const dirName = path.dirname(fullPath)
+        if (!fs.existsSync(dirName)) {
+          fs.mkdirSync(dirName, { recursive: true })
+        }
+        fs.writeFileSync(fullPath, content, 'utf-8')
+        this.log(`[env] Created .env file at ${relativePath}`, notify)
+      } catch (error) {
+        this.log(`[env] Failed to create .env file at ${relativePath}: ${error}`, notify)
+        throw new Error(`Failed to create .env file at ${relativePath}`)
+      }
+    }
+  }
+
   // ---------- package manager detection ----------
   private detectPM(targetDir: string): { pm: 'npm'|'yarn'|'pnpm', addCmd: (dev?: boolean)=>[string,string[]] } {
     const hasYarn = fs.existsSync(path.join(targetDir, 'yarn.lock'))
@@ -350,6 +410,8 @@ export class Orchestrator {
       await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
       await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
 
+      await this.createFrontendEnvFiles(frontDir, notify)
+
       this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
 
       // Clean up node_modules for frontend to ensure a clean install
@@ -362,15 +424,12 @@ export class Orchestrator {
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
 
-      // 루트 .env 파일을 읽어 DB 생성에 필요한 정보 파싱
-      const rootEnvPath = path.join(this.app.getAppPath(), '.env');
-      const envFromRoot = fs.existsSync(rootEnvPath) ? this.parseDotEnv(fs.readFileSync(rootEnvPath, 'utf-8')) : {};
-
-      const jdbcUrl = envFromRoot['SPRING_DATASOURCE_URL'] || '';
+      // DB 정보는 이제 process.env에서 직접 읽어옵니다.
+      const jdbcUrl = process.env.SPRING_DATASOURCE_URL || '';
       const dbHost = jdbcUrl.match(/\/\/([^:/]+)/)?.[1] || '127.0.0.1';
       const dbPort = Number(jdbcUrl.match(/:(\d+)\//)?.[1] || 3306);
-      const dbUser = envFromRoot['SPRING_DATASOURCE_USERNAME'] || 'root';
-      const dbPass = config.server.dbPassword || envFromRoot['SPRING_DATASOURCE_PASSWORD'] || '';
+      const dbUser = process.env.SPRING_DATASOURCE_USERNAME || 'root';
+      const dbPass = config.server.dbPassword || process.env.SPRING_DATASOURCE_PASSWORD || '';
       let dbName = 'mozu';
       const pathPart = jdbcUrl.split('?')[0];
       const lastSlash = pathPart.lastIndexOf('/');
@@ -382,6 +441,7 @@ export class Orchestrator {
       await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
 
       // 루트 .env 파일을 서버 디렉토리로 복사
+      const rootEnvPath = path.join(this.app.getAppPath(), '.env');
       if (fs.existsSync(rootEnvPath)) {
         fs.copyFileSync(rootEnvPath, path.join(serverDir, '.env'));
         this.log(`[env] Copied root .env to server directory.`, notify);
