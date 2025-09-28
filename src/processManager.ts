@@ -38,10 +38,13 @@ function symlinkNoSpace(target: string): string {
   } catch { return target; }
 }
 function detectPM(repoPath: string) {
-  if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) return { cli: 'pnpm', runArgs: ['run'] as string[], yarn: false };
-  if (fs.existsSync(path.join(repoPath, 'yarn.lock')))      return { cli: 'yarn', runArgs: [] as string[], yarn: true };
-  if (fs.existsSync(path.join(repoPath, 'bun.lockb')))      return { cli: 'bun',  runArgs: ['run'] as string[], yarn: false };
-  return { cli: 'npm', runArgs: ['run'] as string[], yarn: false };
+  const isWin = process.platform === 'win32';
+  if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) return { cli: isWin ? 'pnpm.cmd' : 'pnpm', runArgs: ['run'], yarn: false };
+  if (fs.existsSync(path.join(repoPath, 'yarn.lock'))) {
+    return { cli: isWin ? 'npx.cmd' : 'npx', runArgs: ['yarn'], yarn: true };
+  }
+  if (fs.existsSync(path.join(repoPath, 'bun.lockb')))      return { cli: 'bun',  runArgs: ['run'], yarn: false };
+  return { cli: isWin ? 'npm.cmd' : 'npm', runArgs: ['run'], yarn: false };
 }
 function resolveDataSource(repoPath: string): string | null {
   const cands = [
@@ -97,31 +100,32 @@ export class ProcessManager {
 
   installDeps(repoPath: string, onLog?: StartOptions['onLog']) {
     const cwd = symlinkNoSpace(path.resolve(repoPath));
-    const { cli } = detectPM(cwd);
+    const { cli, runArgs, yarn } = detectPM(cwd);
+    const args = yarn ? [...runArgs, 'install'] : ['install'];
     return new Promise<void>((res, rej) => {
-      const p = spawnSafe(cli, ['install'], { cwd, env: mergeEnv(), stdio: 'pipe', tag: 'sys', onLog });
+      const p = spawnSafe(cli, args, { cwd, env: mergeEnv(), stdio: 'pipe', tag: 'sys', onLog });
       p.on('exit', code => code === 0 ? res() : rej(new Error(`${cli} install failed: ${code}`)));
     });
   }
 
   startServer(opts: StartOptions) {
     const cwd = symlinkNoSpace(path.resolve(opts.serverRepoPath));
-    const { cli, runArgs, yarn } = detectPM(cwd);
+    const { cli, runArgs } = detectPM(cwd);
     const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
     const script = pkg.scripts?.['start:dev'] ? 'start:dev' : pkg.scripts?.['start'] ? 'start' : null;
     if (!script) throw new Error('서버 레포에 start/start:dev 스크립트가 없습니다.');
-    const args = yarn ? [script] : [...runArgs, script];
+    const args = [...runArgs, script];
     this.ps.server = spawnSafe(cli, args, { cwd, env: mergeEnv(opts.env), stdio: 'pipe', tag: 'server', onLog: opts.onLog });
   }
 
   startFrontend(opts: StartOptions) {
     if (!opts.frontendRepoPath) return;
     const cwd = symlinkNoSpace(path.resolve(opts.frontendRepoPath));
-    const { cli, runArgs, yarn } = detectPM(cwd);
+    const { cli, runArgs } = detectPM(cwd);
     const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
     const script = pkg.scripts?.['dev'] ? 'dev' : pkg.scripts?.['start'] ? 'start' : null;
     if (!script) throw new Error('프론트 레포에 dev/start 스크립트가 없습니다.');
-    const args = yarn ? [script] : [...runArgs, script];
+    const args = [...runArgs, script];
     this.ps.frontend = spawnSafe(cli, args, { cwd, env: mergeEnv(opts.env), stdio: 'pipe', tag: 'frontend', onLog: opts.onLog });
   }
 

@@ -16,7 +16,11 @@ export class Orchestrator {
 
   constructor(app: App) {
     this.app = app
-    this.workspace = path.join(this.app.getPath('userData'), 'workspace')
+    if (process.platform === 'win32') {
+      this.workspace = 'C:\\mozu-onpremise-workspace'
+    } else {
+      this.workspace = path.join(this.app.getPath('userData'), 'workspace')
+    }
   }
 
   // ---------- utils ----------
@@ -78,7 +82,7 @@ export class Orchestrator {
   }
 
   // ---------- preflight ----------
-  private async ensureTools() {
+  private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
       await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath() })
     } catch (err) {
@@ -88,6 +92,18 @@ export class Orchestrator {
       await this.execChecked(this.npmCmd(), ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() })
     } catch (err) {
       throw new Error('npm이 설치되지 않았거나 PATH에 없습니다. Node.js와 npm을 설치하고 다시 시도하세요.')
+    }
+    try {
+      await this.execChecked('yarn', ['--version'], { cwd: os.homedir(), shell: true, env: this.envWithDefaultPath() });
+    } catch (err) {
+      this.log('[tools] yarn not found. Attempting to install globally via npm...', notify);
+      try {
+        await this.execStream(this.npmCmd(), ['install', '-g', 'yarn'], os.homedir(), notify, true);
+        this.log('[tools] yarn has been installed globally.', notify);
+      } catch (installErr) {
+        this.log('[tools] Failed to install yarn globally.', notify);
+        throw new Error('yarn을 찾을 수 없으며, npm을 통해 전역으로 설치하는 데에도 실패했습니다. 수동으로 yarn을 설치하고 다시 시도하세요.');
+      }
     }
   }
 
@@ -164,6 +180,66 @@ export class Orchestrator {
     this.log(`[env] wrote ${path.relative(serverDir, envPath)}`, notify)
   }
 
+  private async createFrontendEnvFiles(frontDir: string, notify?: (s: LaunchStatus) => void) {
+    this.log('[env] Creating .env files for frontend from root .env...', notify)
+
+    const getVar = (key: string, defaultValue: string = ''): string => {
+      return process.env[key] || defaultValue
+    }
+
+    const envFileContents: Record<string, string> = {
+      'packages/admin/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL')}`,
+        `VITE_ADMIN_URL=${getVar('ADMIN_VITE_ADMIN_URL')}`,
+        `VITE_ADMIN_AUTH_URL=${getVar('ADMIN_VITE_ADMIN_AUTH_URL')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('ADMIN_VITE_ADMIN_COOKIE_DOMAIN')}`,
+        `BRANCH=${getVar('BRANCH')}`,
+        `TEST_ID=${getVar('TEST_ID')}`,
+        `TEST_PW=${getVar('TEST_PW')}`
+      ].join('\n'),
+
+      'packages/student/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL')}`,
+        `VITE_STUDENT_URL=${getVar('STUDENT_VITE_STUDENT_URL')}`,
+        `VITE_STUDENT_AUTH_URL=${getVar('STUDENT_VITE_STUDENT_AUTH_URL')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('STUDENT_VITE_STUDENT_COOKIE_DOMAIN')}`,
+        `BRANCH=${getVar('BRANCH')}`
+      ].join('\n'),
+
+      'packages/ui/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL')}`,
+        `VITE_ADMIN_URL=${getVar('UI_VITE_ADMIN_URL')}`,
+        `VITE_ADMIN_AUTH_URL=${getVar('UI_VITE_ADMIN_AUTH_URL')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('UI_VITE_ADMIN_COOKIE_DOMAIN')}`,
+        `VITE_STUDENT_URL=${getVar('UI_VITE_STUDENT_URL')}`,
+        `VITE_STUDENT_AUTH_URL=${getVar('UI_VITE_STUDENT_AUTH_URL')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('UI_VITE_STUDENT_COOKIE_DOMAIN')}`
+      ].join('\n'),
+
+      'packages/util-config/.env': [
+        `VITE_SERVER_URL=${getVar('VITE_SERVER_URL')}`,
+        `VITE_COOKIE_DOMAIN=${getVar('UTIL_VITE_COOKIE_DOMAIN')}`,
+        `VITE_ADMIN_COOKIE_DOMAIN=${getVar('UTIL_VITE_ADMIN_COOKIE_DOMAIN')}`,
+        `VITE_STUDENT_COOKIE_DOMAIN=${getVar('UTIL_VITE_STUDENT_COOKIE_DOMAIN')}`
+      ].join('\n')
+    }
+
+    for (const [relativePath, content] of Object.entries(envFileContents)) {
+      try {
+        const fullPath = path.join(frontDir, relativePath)
+        const dirName = path.dirname(fullPath)
+        if (!fs.existsSync(dirName)) {
+          fs.mkdirSync(dirName, { recursive: true })
+        }
+        fs.writeFileSync(fullPath, content, 'utf-8')
+        this.log(`[env] Created .env file at ${relativePath}`, notify)
+      } catch (error) {
+        this.log(`[env] Failed to create .env file at ${relativePath}: ${error}`, notify)
+        throw new Error(`Failed to create .env file at ${relativePath}`)
+      }
+    }
+  }
+
   // ---------- package manager detection ----------
   private detectPM(targetDir: string): { pm: 'npm'|'yarn'|'pnpm', addCmd: (dev?: boolean)=>[string,string[]] } {
     const hasYarn = fs.existsSync(path.join(targetDir, 'yarn.lock'))
@@ -176,11 +252,14 @@ export class Orchestrator {
   // ---------- deps ----------
   private async installDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
     let cmd = installCommand
+    if (cmd?.trim().startsWith('yarn')) {
+      cmd = 'corepack yarn install';
+    }
     if (!cmd) {
       const hasYarn = fs.existsSync(path.join(targetDir, 'yarn.lock'))
       const hasPnpm = fs.existsSync(path.join(targetDir, 'pnpm-lock.yaml'))
       const hasNpmLock = fs.existsSync(path.join(targetDir, 'package-lock.json'))
-      if (hasYarn) cmd = 'yarn install'
+      if (hasYarn) cmd = 'corepack yarn install'
       else if (hasPnpm) cmd = 'pnpm install'
       else if (hasNpmLock) cmd = 'npm ci'
       else cmd = 'npm install'
@@ -217,42 +296,67 @@ export class Orchestrator {
   // ---------- Windows: MySQL 설치 / 서비스 시작 ----------
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
+
+    const execElevated = async (cmd: string, args: string[]) => {
+      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
+      // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
+      // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
+      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
+      
+      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
+    }
+
     // mysql 클라이언트 존재 확인
     let hasMysql = false
     try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
-    if (!hasMysql) {
-      this.log('[mysql] not found. trying to install via winget...', notify)
+    if (hasMysql) {
+      this.log('[mysql] MySQL is already installed.', notify)
+    } else {
+      this.log('[mysql] not found. trying to install via winget with elevation...', notify)
       // winget
       let wingetOk = false
       try { await this.execChecked('winget', ['--version'], { env: this.envWithDefaultPath() }); wingetOk = true } catch {}
       if (wingetOk) {
-        // 여러 id 시도 (환경에 따라 패키지 id가 다를 수 있음)
         const candidates = [
           ['Oracle.MySQL', []],
           ['Oracle.MySQLServer', []],
-          ['Oracle.MySQL', ['--source','winget']],
-          ['Oracle.MySQLServer', ['--source','winget']],
         ] as const
         for (const [id, extra] of candidates) {
           try {
-            // --silent: 자동 설치, --accept-package-agreements: 라이선스 동의
-            await this.execStream('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], process.cwd(), notify, true)
-            hasMysql = true
-            break
-          } catch {}
+            this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
+            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
+            // 설치 후 다시 확인
+            try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
+            if (hasMysql) {
+              this.log(`[mysql] Successfully installed ${id} via winget.`, notify);
+              break;
+            }
+          } catch (e: any) {
+            this.log(`[mysql] winget install for ${id} failed. Error: ${e?.message || e}`, notify);
+          }
         }
       }
       // choco fallback
       if (!hasMysql) {
-        this.log('[mysql] trying Chocolatey...', notify)
+        this.log('[mysql] winget failed. Trying Chocolatey with elevation...', notify)
         let chocoOk = false
         try { await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() }); chocoOk = true } catch {}
         if (chocoOk) {
           try {
-            // /Password:'' 로 비밀번호 없이 설치
-            await this.execStream('choco', ['install', 'mysql', '-y', '--params', '"/Password:"' ], process.cwd(), notify, true)
-            hasMysql = true
-          } catch {}
+            // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
+            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
+            // 설치 성공 여부를 직접 확인
+            try {
+              await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
+              hasMysql = true;
+              this.log(`[mysql] Successfully installed via choco.`, notify);
+            } catch {
+              // 'where mysql' 명령이 실패하면, choco 설치가 실제로는 실패한 것으로 간주
+              throw new Error("'choco install' command finished, but 'mysql.exe' was not found in PATH.");
+            }
+          } catch (e: any) {
+            this.log(`[mysql] choco install failed. Error: ${e?.message || e}`, notify);
+          }
         }
       }
       if (!hasMysql) {
@@ -260,16 +364,17 @@ export class Orchestrator {
       }
     }
 
-    // 서비스 시작 시도
-    try {
-      // 서비스 이름 자동 탐색
-      const getName = `Get-Service | Where-Object {$_.Name -like 'MySQL*' -or $_.Name -like 'mysql*'} | Select -First 1 -ExpandProperty Name`
-      await this.execStream('powershell', ['-NoProfile','-Command', getName], process.cwd(), notify, true)
-      const startSvc = `Get-Service | Where-Object {$_.Name -like 'MySQL*' -or $_.Name -like 'mysql*'} | Select -First 1 | Start-Service`
-      await this.execStream('powershell', ['-NoProfile','-Command', startSvc], process.cwd(), notify, true)
-      this.log('[mysql] service started (if installed)', notify)
-    } catch {
-      this.log('[mysql] 서비스 시작 실패(권한/설치 상태 확인). 이미 실행 중일 수 있음.', notify)
+    // 서비스 시작 시도 (관리자 권한으로)
+    if (hasMysql) {
+      try {
+        this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
+        const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
+        const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
+        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
+        this.log('[mysql] service start command issued (if installed and not running).', notify)
+      } catch (e: any) {
+        this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
+      }
     }
   }
 
@@ -282,6 +387,9 @@ export class Orchestrator {
       await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, false)
       this.log(`[mysql] ensured database "${db.database}"`, notify)
     } catch (e:any) {
+      if (e?.message?.includes('ENOENT')) {
+        throw new Error('`mysql` 명령어를 찾을 수 없습니다. MySQL을 설치하고, 설치 경로의 `bin` 폴더를 시스템 환경 변수 PATH에 추가했는지 확인하세요.')
+      }
       this.log(`[mysql] DB 생성 실패: ${e?.message || e}`, notify)
       // 계속 진행은 하지만 서버가 접속 실패할 수 있음
     }
@@ -308,8 +416,9 @@ export class Orchestrator {
         const [c, ...args] = requested.split(' ')
         return { cmd: c, args, label: 'requested' }
       }
-      if (pkg.scripts?.['start:dev']) return { cmd: this.npmCmd(), args: ['run', 'start:dev'], label: 'npm run start:dev' }
-      if (pkg.scripts?.['start']) return { cmd: this.npmCmd(), args: ['run', 'start'], label: 'npm run start' }
+      const pm = this.detectPM(targetDir).pm;
+      if (pkg.scripts?.['start:dev']) return { cmd: pm, args: ['run', 'start:dev'], label: `${pm} run start:dev` }
+      if (pkg.scripts?.['start']) return { cmd: pm, args: ['run', 'start'], label: `${pm} run start` }
     }
     // fallback: 로컬 nest → npx nest
     const localNest = this.localBin(targetDir, 'nest')
@@ -320,6 +429,20 @@ export class Orchestrator {
   // ---------- main flow ----------
   async start(config: RepoConfig, notify?: (s: LaunchStatus) => void) {
     try {
+
+      const rootEnvPath = path.join(this.app.getAppPath(), '.env');
+
+      // Load .env file from app root
+      if (fs.existsSync(rootEnvPath)) {
+        const envConfig = this.parseDotEnv(fs.readFileSync(rootEnvPath, 'utf-8'));
+        for (const k in envConfig) {
+          if (!Object.prototype.hasOwnProperty.call(process.env, k)) {
+            process.env[k] = envConfig[k];
+          }
+        }
+        this.log(`[env] Loaded root .env file into process environment.`, notify);
+      }
+
       this.update({ step: 'checking-tools', message: 'Checking git and npm...' }, notify)
       await this.ensureTools()
 
@@ -330,7 +453,14 @@ export class Orchestrator {
       await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
       await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
 
+      await this.createFrontendEnvFiles(frontDir, notify)
+
       this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
+
+      // Clean up node_modules to ensure a clean install, especially for PnP projects
+      this.log('[deps] Cleaning up existing node_modules directories...', notify);
+      fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
+      fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
       await this.installDeps(serverDir, config.server.installCommand, notify)
       await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
@@ -368,7 +498,7 @@ export class Orchestrator {
       const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
       this.log(`[start] server via ${srv.label}`, notify)
       this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: false, env: this.envWithDefaultPath(envFromFiles) }),
+        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: process.platform === 'win32', env: this.envWithDefaultPath(envFromFiles) }),
         cwd: serverDir
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
@@ -379,7 +509,7 @@ export class Orchestrator {
       const fe = await this.resolveStartCommand(frontDir, config.frontend.startCommand)
       this.log(`[start] frontend via ${fe.label}`, notify)
       this.frontend = {
-        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: false, env: this.envWithDefaultPath() }),
+        proc: spawn(fe.cmd, fe.args, { cwd: frontDir, shell: process.platform === 'win32', env: this.envWithDefaultPath() }),
         cwd: frontDir
       }
       this.frontend.proc?.stdout?.on('data', (d) => this.log(`[frontend] ${d.toString().trim()}`, notify))
