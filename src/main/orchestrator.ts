@@ -149,12 +149,12 @@ export class Orchestrator {
 
   private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
-      await this.execChecked('git', ['--version'], { cwd: os.homedir(), shell: true })
+      await this.execChecked('git', ['--version'], { cwd: os.homedir(), env: this.envWithDefaultPath(), shell: true })
     } catch (err) {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      await this.execChecked('java', ['-version'], { cwd: os.homedir(), shell: true })
+      await this.execChecked('java', ['-version'], { cwd: os.homedir(), env: this.envWithDefaultPath(), shell: true })
     } catch (err) {
       if (process.platform === 'win32') {
         await this.installJavaOnWindows(notify);
