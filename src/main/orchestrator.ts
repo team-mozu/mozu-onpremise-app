@@ -13,6 +13,7 @@ export class Orchestrator {
   private status: LaunchStatus = { step: 'idle', logs: [] }
   private server: Proc | null = null
   private frontend: Proc | null = null
+  private discoveredJavaHome: string | null = null;
 
   constructor(app: App) {
     this.app = app
@@ -33,6 +34,23 @@ export class Orchestrator {
   }
 
   // ---------- utils ----------
+  private async execAndGetOutput(cmd: string, args: string[], opts: any = {}): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const p = spawn(cmd, args, { shell: true, ...opts });
+        let stdout = '';
+        let stderr = '';
+        p.stdout?.on('data', (d) => stdout += d.toString());
+        p.stderr?.on('data', (d) => stderr += d.toString());
+        p.on('error', reject);
+        p.on('exit', (code) => {
+            if (code === 0) {
+                resolve(stdout);
+            } else {
+                reject(new Error(`'${cmd}' exited with code ${code}. Stderr: ${stderr}`));
+            }
+        });
+    });
+  }
   private envWithDefaultPath(extraEnv: Record<string,string> = {}) {
     const extraPath = process.platform === 'darwin'
       ? ['/opt/homebrew/bin', '/usr/local/bin']
@@ -145,14 +163,31 @@ export class Orchestrator {
 
   private async ensureTools(notify?: (s: LaunchStatus) => void) {
     try {
-      await this.execChecked('git', ['--version'], { cwd: os.homedir(), shell: true })
+      await this.execChecked('git', ['--version'], { shell: true })
     } catch (err) {
       throw new Error('git이 설치되지 않았거나 PATH에 없습니다. git을 설치하고 다시 시도하세요.')
     }
     try {
-      await this.execChecked('java', ['-version'], { cwd: os.homedir(), shell: true })
+      await this.execChecked('java', ['-version'], { shell: true })
+      this.log('[java] Found java in PATH, proceeding.', notify);
     } catch (err) {
       if (process.platform === 'win32') {
+        try {
+          this.log('[java] `java -version` failed. Trying to find java.exe path with `where` command...', notify);
+          const whereResult = await this.execAndGetOutput('where', ['java']);
+          const javaPath = whereResult.split(/\r?\n/)[0].trim();
+          if (javaPath && fs.existsSync(javaPath)) {
+              this.log(`[java] Found java.exe at: ${javaPath}`, notify);
+              const javaHome = path.dirname(path.dirname(javaPath));
+              this.log(`[java] Inferred JAVA_HOME: ${javaHome}`, notify);
+              this.discoveredJavaHome = javaHome;
+              await this.execChecked('java', ['-version'], { shell: true, env: { JAVA_HOME: this.discoveredJavaHome } });
+              this.log('[java] Java check successful with discovered JAVA_HOME.', notify);
+              return; 
+          }
+        } catch (findErr) {
+            this.log('[java] Failed to find java.exe with `where` command. Proceeding to auto-install.', notify);
+        }
         await this.installJavaOnWindows(notify);
       } else {
         throw new Error('Java(JDK)가 설치되지 않았거나 PATH에 없습니다. Java를 설치하고 다시 시도하세요.')
@@ -254,7 +289,11 @@ export class Orchestrator {
       }
     }
     this.log(`[deps] ${gradlew} build @ server`, notify)
-    await this.execStream(gradlew, ['build', '--no-daemon'], targetDir, notify, true)
+    const env: Record<string, string> = {};
+    if (this.discoveredJavaHome) {
+        env.JAVA_HOME = this.discoveredJavaHome;
+    }
+    await this.execStream(gradlew, ['build', '--no-daemon'], targetDir, notify, true, env)
   }
 
   private async installFrontendDeps(targetDir: string, installCommand?: string, notify?: (s: LaunchStatus) => void) {
@@ -441,8 +480,12 @@ export class Orchestrator {
       // 서버 시작 (환경변수 주입 없이)
       const srv = await this.resolveStartCommand(serverDir, 'server', config.server.startCommand)
       this.log(`[start] server via ${srv.label}`, notify)
+      const spawnEnv: Record<string, string | undefined> = this.envWithDefaultPath();
+      if (this.discoveredJavaHome) {
+          spawnEnv.JAVA_HOME = this.discoveredJavaHome;
+      }
       this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: this.envWithDefaultPath() }),
+        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: true, env: spawnEnv }),
         cwd: serverDir
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
