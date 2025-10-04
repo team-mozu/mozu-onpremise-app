@@ -358,7 +358,7 @@ export class Orchestrator {
   private async createDatabaseIfNeeded(db: {host:string;port:number;user:string;password:string;database:string}, notify?: (s: LaunchStatus)=>void) {
     const args = ['-h', db.host, '-P', String(db.port), '-u', db.user]
     if (db.password) args.push(`-p${db.password}`)
-    const sql = `CREATE DATABASE IF NOT EXISTS lexible${db.database}lexible DEFAULT CHARACTER SET utf8mb4;`
+    const sql = `CREATE DATABASE IF NOT EXISTS \`${db.database}\` DEFAULT CHARACTER SET utf8mb4;`
     try {
       await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, false)
       this.log(`[mysql] ensured database "${db.database}"`, notify)
