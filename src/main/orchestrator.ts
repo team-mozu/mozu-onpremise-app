@@ -530,7 +530,7 @@ export class Orchestrator {
       const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
       const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
       const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
-      const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
+      const dbPass = config.server.dbPassword != null ? config.server.dbPassword : (envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || '')
       const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
 
       // DB 생성 시도
