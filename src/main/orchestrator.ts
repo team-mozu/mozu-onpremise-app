@@ -574,10 +574,10 @@ export class Orchestrator {
       await this.ensureTools()
 
       this.update({ step: 'preparing', message: 'Preparing workspace...' }, notify)
-      const { serverDir, frontDir } = await this.ensureWorkspace(config.workspaceDir)
+      const { frontDir } = await this.ensureWorkspace(config.workspaceDir)
 
       this.update({ step: 'cloning', message: 'Syncing repositories...' }, notify)
-      await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
+      // await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
       await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
 
       await this.createFrontendEnvFiles(frontDir, notify)
@@ -587,6 +587,17 @@ export class Orchestrator {
       fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
       await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
+      this.log('[deps] Installing missing peer dependency for framer-motion...', notify)
+      try {
+        const pm = this.detectPM(frontDir)
+        const [cmd, baseArgs] = pm.addCmd()
+        await this.execStream(cmd, [...baseArgs, '@emotion/is-prop-valid'], frontDir, notify, true)
+      } catch (e: any) {
+        this.log(`[deps] Failed to install peer dependency: ${e.message}`, notify)
+        // Do not re-throw, as it might not be critical
+      }
+
+      /*
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
 
@@ -603,11 +614,14 @@ export class Orchestrator {
 
       // DB 생성 시도
       await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
+      */
 
       this.update({ step: 'starting', message: 'Starting processes...' }, notify)
 
+      /*
       // 서버 시작 (Spring Boot)
       await this.startSpringServer(serverDir, envFromFiles, notify);
+      */
 
       // 프론트 시작
       const fe = await this.resolveStartCommand(frontDir, config.frontend.startCommand)
@@ -623,7 +637,7 @@ export class Orchestrator {
       this.update({
         step: 'running',
         message: 'Running',
-        serverPid: this.server?.proc?.pid ?? null,
+        serverPid: null, //서버 프로세스 비활성화
         frontendPid: this.frontend.proc?.pid ?? null
       }, notify)
 
