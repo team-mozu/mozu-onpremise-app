@@ -320,7 +320,7 @@ export class Orchestrator {
         if (chocoOk) {
           try {
             // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
-            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
+            await execElevated('choco', ['install', 'mysql', '-y', '--params', `'"/Password:""'`]);
             // 설치 성공 여부를 직접 확인
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
@@ -358,7 +358,7 @@ export class Orchestrator {
   private async createDatabaseIfNeeded(db: {host:string;port:number;user:string;password:string;database:string}, notify?: (s: LaunchStatus)=>void) {
     const args = ['-h', db.host, '-P', String(db.port), '-u', db.user]
     if (db.password) args.push(`-p${db.password}`)
-    const sql = `CREATE DATABASE IF NOT EXISTS \`${db.database}\` DEFAULT CHARACTER SET utf8mb4;`
+    const sql = `CREATE DATABASE IF NOT EXISTS lexible${db.database}lexible DEFAULT CHARACTER SET utf8mb4;`
     try {
       await this.execStream('mysql', [...args, '-e', sql], process.cwd(), notify, false)
       this.log(`[mysql] ensured database "${db.database}"`, notify)
