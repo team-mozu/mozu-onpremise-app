@@ -355,80 +355,65 @@ export class Orchestrator {
   }
 
   // ---------- Windows: Redis 설치 / 서비스 시작 ----------
-  private async ensureRedisOnWindows(notify?: (s: LaunchStatus)=>void) {
+  private async ensureRedisOnWSL(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
 
-    this.log('[redis] Checking for Redis...', notify);
-
-    // 1. Check if redis-cli executable exists
-    let redisCliExists = false;
+    // 1. Check if WSL is installed
+    this.log('[redis-wsl] Checking for WSL...', notify);
     try {
-      await this.execChecked('where', ['redis-cli'], { env: this.envWithDefaultPath() });
-      redisCliExists = true;
+      await this.execChecked('wsl', ['--status'], { env: this.envWithDefaultPath() });
     } catch {
-      this.log('[redis] redis-cli not found.', notify);
+      throw new Error('WSL is not installed or not available in PATH. Please install WSL and a Linux distribution.');
     }
 
-    // 2. If it exists, check if it's running
-    if (redisCliExists) {
-      try {
-        await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
-        this.log('[redis] Redis is already running.', notify);
-        return; // It's running, so we're done.
-      } catch (e: any) {
-        this.log(`[redis] Redis is installed but not running. Attempting to start service...`, notify)
-        // Go to step 4 to start the service
-      }
-    } else {
-      // 3. If executable doesn't exist, install via Chocolatey
-      this.log('[redis] Redis not found. Attempting installation via Chocolatey...', notify);
-      try {
-          await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() });
-      } catch {
-          throw new Error('Chocolatey is not found. Please install Chocolatey to automatically install Redis.');
-      }
-
-      this.log('[redis] Chocolatey found. Installing Redis...', notify);
-      try {
-          await this.execElevated('choco', ['install', 'redis', '-y'], notify);
-          // IMPORTANT: Force user to restart to update PATH
-          this.log('[redis] Redis installation complete. Please restart the application.', notify);
-          throw new Error('Redis has been installed. Please restart the application for changes to take effect.');
-      } catch (installErr: any) {
-          // If the error is the one we threw on purpose, re-throw it.
-          if (installErr.message.includes('Redis has been installed')) throw installErr;
-          this.log(`[redis] Redis installation via choco failed: ${installErr.message}`, notify);
-          throw new Error('Failed to install Redis via Chocolatey.');
-      }
-    }
-
-    // 4. Start the Redis service
+    // 2. Check if redis-cli is available and if server is running inside WSL
+    this.log('[redis-wsl] Checking for Redis inside WSL...', notify);
     try {
-        this.log('[redis] Attempting to start Redis service with elevation...', notify);
-        const startSvc = `try { Get-Service -Name 'Redis*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru -ErrorAction Stop } catch { Write-Error $_.Exception.Message; exit 1 }`;
-        const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
-        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
-        this.log('[redis] Redis service start command issued.', notify);
+      await this.execStream('wsl', ['redis-cli', 'ping'], process.cwd(), notify);
+      this.log('[redis-wsl] Redis is already running inside WSL.', notify);
+      return; // It's running, so we're done.
     } catch (e: any) {
-        this.log(`[redis] Failed to start Redis service: ${e.message}. This might be okay if it's already running.`, notify);
+      this.log(`[redis-wsl] Redis is not running or not found in WSL. Attempting installation...`, notify)
+    }
+
+    // 3. If not running, try to install via apt-get in WSL
+    this.log('[redis-wsl] Updating apt-get and installing redis-server in WSL...', notify);
+    try {
+        // This might ask for a password if sudo requires it.
+        await this.execStream('wsl', ['sudo', 'apt-get', 'update'], process.cwd(), notify);
+        await this.execStream('wsl', ['sudo', 'apt-get', 'install', '-y', 'redis-server'], process.cwd(), notify);
+        this.log('[redis-wsl] Redis installation complete in WSL.', notify);
+    } catch (installErr: any) {
+        this.log(`[redis-wsl] Redis installation in WSL failed: ${installErr.message}`, notify);
+        throw new Error('Failed to install Redis in WSL. Please ensure you have a WSL distribution with apt-get and sudo privileges.');
+    }
+
+    // 4. Start the Redis service inside WSL
+    this.log('[redis-wsl] Attempting to start Redis service inside WSL...', notify);
+    try {
+        await this.execStream('wsl', ['sudo', 'service', 'redis-server', 'start'], process.cwd(), notify);
+        this.log('[redis-wsl] Redis service start command issued in WSL.', notify);
+    } catch (e: any) {
+        this.log(`[redis-wsl] Failed to start Redis service in WSL: ${e.message}.`, notify);
+        throw new Error('Failed to start Redis service in WSL.');
     }
 
     // 5. Final check with retry
-    this.log('[redis] Verifying Redis status after starting service...', notify);
+    this.log('[redis-wsl] Verifying Redis status after starting service...', notify);
     let attempts = 5;
     while (attempts > 0) {
         try {
-            await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
-            this.log('[redis] Redis is now running.', notify);
+            await this.execStream('wsl', ['redis-cli', 'ping'], process.cwd(), notify);
+            this.log('[redis-wsl] Redis is now running in WSL.', notify);
             return; // Success
         } catch (e: any) {
             attempts--;
             if (attempts > 0) {
-                this.log(`[redis] Ping failed. Retrying in 2 seconds... (${attempts} attempts left)`, notify);
+                this.log(`[redis-wsl] Ping failed. Retrying in 2 seconds... (${attempts} attempts left)`, notify);
                 await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s
             } else {
-                this.log(`[redis] Failed to verify Redis status after multiple attempts: ${e.message}`, notify);
-                throw new Error('Failed to verify Redis status after installation. It may require manual intervention.');
+                this.log(`[redis-wsl] Failed to verify Redis status after multiple attempts: ${e.message}`, notify);
+                throw new Error('Failed to verify Redis status in WSL. It may require manual intervention.');
             }
         }
     }
@@ -605,8 +590,8 @@ export class Orchestrator {
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
 
-      // Windows: Redis 설치/서비스
-      await this.ensureRedisOnWindows(notify)
+      // Windows: Redis 설치/서비스 (WSL)
+      await this.ensureRedisOnWSL(notify)
 
       // 환경 변수 수집
       const envFromFiles = this.loadServerEnv(serverDir)
