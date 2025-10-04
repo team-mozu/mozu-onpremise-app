@@ -20,7 +20,7 @@ declare global {
 // 하드코딩된 설정 (필요시 여기만 수정)
 const FIXED_CFG: RepoCfg = {
   server: {
-    url: 'https://github.com/team-mozu/mozu-BE.git',
+    url: 'https://github.com/team-mozu/mozu-BE-v2.git',
     branch: 'develop',
     startCommand: 'nest start',
     installCommand: 'npm install',
