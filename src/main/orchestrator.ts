@@ -358,34 +358,51 @@ export class Orchestrator {
   private async ensureRedisOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
 
-    // 1. Check if redis-cli is available and if server is running
     this.log('[redis] Checking for Redis...', notify);
-    try {
-      await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
-      this.log('[redis] Redis is already running.', notify);
-      return; // It's running, so we're done.
-    } catch (e: any) {
-      this.log(`[redis] Redis is not running or not found. Attempting installation...`, notify)
-    }
 
-    // 2. If not running, try to install via Chocolatey
-    this.log('[redis] Checking for Chocolatey...', notify);
+    // 1. Check if redis-cli executable exists
+    let redisCliExists = false;
     try {
-        await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() });
+      await this.execChecked('where', ['redis-cli'], { env: this.envWithDefaultPath() });
+      redisCliExists = true;
     } catch {
-        throw new Error('Chocolatey is not found. Please install Chocolatey to automatically install Redis.');
+      this.log('[redis] redis-cli not found.', notify);
     }
 
-    this.log('[redis] Chocolatey found. Installing Redis...', notify);
-    try {
-        await this.execElevated('choco', ['install', 'redis', '-y'], notify);
-        this.log('[redis] Redis installation complete via Chocolatey.', notify);
-    } catch (installErr: any) {
-        this.log(`[redis] Redis installation via choco failed: ${installErr.message}`, notify);
-        throw new Error('Failed to install Redis via Chocolatey.');
+    // 2. If it exists, check if it's running
+    if (redisCliExists) {
+      try {
+        await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
+        this.log('[redis] Redis is already running.', notify);
+        return; // It's running, so we're done.
+      } catch (e: any) {
+        this.log(`[redis] Redis is installed but not running. Attempting to start service...`, notify)
+        // Go to step 4 to start the service
+      }
+    } else {
+      // 3. If executable doesn't exist, install via Chocolatey
+      this.log('[redis] Redis not found. Attempting installation via Chocolatey...', notify);
+      try {
+          await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() });
+      } catch {
+          throw new Error('Chocolatey is not found. Please install Chocolatey to automatically install Redis.');
+      }
+
+      this.log('[redis] Chocolatey found. Installing Redis...', notify);
+      try {
+          await this.execElevated('choco', ['install', 'redis', '-y'], notify);
+          // IMPORTANT: Force user to restart to update PATH
+          this.log('[redis] Redis installation complete. Please restart the application.', notify);
+          throw new Error('Redis has been installed. Please restart the application for changes to take effect.');
+      } catch (installErr: any) {
+          // If the error is the one we threw on purpose, re-throw it.
+          if (installErr.message.includes('Redis has been installed')) throw installErr;
+          this.log(`[redis] Redis installation via choco failed: ${installErr.message}`, notify);
+          throw new Error('Failed to install Redis via Chocolatey.');
+      }
     }
 
-    // 3. Start the Redis service
+    // 4. Start the Redis service
     try {
         this.log('[redis] Attempting to start Redis service with elevation...', notify);
         const startSvc = `Get-Service -Name 'Redis' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
@@ -396,14 +413,24 @@ export class Orchestrator {
         this.log(`[redis] Failed to start Redis service: ${e.message}. This might be okay if it's already running.`, notify);
     }
 
-    // 4. Final check
-    this.log('[redis] Verifying Redis status after installation...', notify);
-    try {
-        await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
-        this.log('[redis] Redis is now running.', notify);
-    } catch (e: any) {
-        this.log(`[redis] Failed to verify Redis status after installation: ${e.message}`, notify);
-        throw new Error('Failed to verify Redis status after installation. It may require manual intervention.');
+    // 5. Final check with retry
+    this.log('[redis] Verifying Redis status after starting service...', notify);
+    let attempts = 5;
+    while (attempts > 0) {
+        try {
+            await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
+            this.log('[redis] Redis is now running.', notify);
+            return; // Success
+        } catch (e: any) {
+            attempts--;
+            if (attempts > 0) {
+                this.log(`[redis] Ping failed. Retrying in 2 seconds... (${attempts} attempts left)`, notify);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s
+            } else {
+                this.log(`[redis] Failed to verify Redis status after multiple attempts: ${e.message}`, notify);
+                throw new Error('Failed to verify Redis status after installation. It may require manual intervention.');
+            }
+        }
     }
   }
 
