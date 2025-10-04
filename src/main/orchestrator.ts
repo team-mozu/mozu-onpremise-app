@@ -269,18 +269,18 @@ export class Orchestrator {
     await this.execStream(c, args, targetDir, notify, true)
   }
 
+  private async execElevated(cmd: string, args: string[], notify?: (s: LaunchStatus)=>void) {
+    const argString = args.map(arg => `'${arg.replace(/'/g, "'''")}'`).join(',');
+    // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
+    // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
+    const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath \"${cmd}\" -ArgumentList @(${argString}); exit $p.ExitCode`;
+    
+    await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
+  }
+
   // ---------- Windows: MySQL 설치 / 서비스 시작 ----------
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
-
-    const execElevated = async (cmd: string, args: string[]) => {
-      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-      // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
-      // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
-      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
-      
-      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
-    }
 
     // mysql 클라이언트 존재 확인
     let hasMysql = false
@@ -300,7 +300,7 @@ export class Orchestrator {
         for (const [id, extra] of candidates) {
           try {
             this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
-            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
+            await this.execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], notify);
             // 설치 후 다시 확인
             try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
             if (hasMysql) {
@@ -320,7 +320,7 @@ export class Orchestrator {
         if (chocoOk) {
           try {
             // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
-            await execElevated('choco', ['install', 'mysql', '-y', '--params', `'"/Password:""'`]);
+            await this.execElevated('choco', ['install', 'mysql', '-y', '--params', `'"/Password:""'`], notify);
             // 설치 성공 여부를 직접 확인
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
@@ -346,11 +346,64 @@ export class Orchestrator {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
         const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
         const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
-        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
+        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
         this.log('[mysql] service start command issued (if installed and not running).', notify)
       } catch (e: any) {
         this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
       }
+    }
+  }
+
+  // ---------- Windows: Redis 설치 / 서비스 시작 ----------
+  private async ensureRedisOnWindows(notify?: (s: LaunchStatus)=>void) {
+    if (process.platform !== 'win32') return
+
+    // 1. Check if redis-cli is available and if server is running
+    this.log('[redis] Checking for Redis...', notify);
+    try {
+      await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
+      this.log('[redis] Redis is already running.', notify);
+      return; // It's running, so we're done.
+    } catch (e: any) {
+      this.log(`[redis] Redis is not running or not found. Attempting installation...`, notify)
+    }
+
+    // 2. If not running, try to install via Chocolatey
+    this.log('[redis] Checking for Chocolatey...', notify);
+    try {
+        await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() });
+    } catch {
+        throw new Error('Chocolatey is not found. Please install Chocolatey to automatically install Redis.');
+    }
+
+    this.log('[redis] Chocolatey found. Installing Redis...', notify);
+    try {
+        await this.execElevated('choco', ['install', 'redis', '-y'], notify);
+        this.log('[redis] Redis installation complete via Chocolatey.', notify);
+    } catch (installErr: any) {
+        this.log(`[redis] Redis installation via choco failed: ${installErr.message}`, notify);
+        throw new Error('Failed to install Redis via Chocolatey.');
+    }
+
+    // 3. Start the Redis service
+    try {
+        this.log('[redis] Attempting to start Redis service with elevation...', notify);
+        const startSvc = `Get-Service -Name 'Redis' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
+        const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
+        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
+        this.log('[redis] Redis service start command issued.', notify);
+    } catch (e: any) {
+        this.log(`[redis] Failed to start Redis service: ${e.message}. This might be okay if it's already running.`, notify);
+    }
+
+    // 4. Final check
+    this.log('[redis] Verifying Redis status after installation...', notify);
+    try {
+        await this.execStream('redis-cli', ['ping'], process.cwd(), notify);
+        this.log('[redis] Redis is now running.', notify);
+    } catch (e: any) {
+        this.log(`[redis] Failed to verify Redis status after installation: ${e.message}`, notify);
+        throw new Error('Failed to verify Redis status after installation. It may require manual intervention.');
     }
   }
 
@@ -524,6 +577,9 @@ export class Orchestrator {
 
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
+
+      // Windows: Redis 설치/서비스
+      await this.ensureRedisOnWindows(notify)
 
       // 환경 변수 수집
       const envFromFiles = this.loadServerEnv(serverDir)
