@@ -443,6 +443,8 @@ export class Orchestrator {
     this.log('[spring] Creating .env file for Spring project...', notify);
     try {
         const rootEnvPath = path.join(this.app.getAppPath(), '.env');
+        console.log('>>>> [DEBUG] app.getAppPath() is:', this.app.getAppPath());
+        console.log('>>>> [DEBUG] Looking for .env at:', rootEnvPath);
         if (!fs.existsSync(rootEnvPath)) {
             throw new Error('Root .env file not found.');
         }
