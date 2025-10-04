@@ -405,7 +405,7 @@ export class Orchestrator {
     // 4. Start the Redis service
     try {
         this.log('[redis] Attempting to start Redis service with elevation...', notify);
-        const startSvc = `Get-Service -Name 'Redis' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
+        const startSvc = `Get-Service -Name 'Redis*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
         const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
         await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
         this.log('[redis] Redis service start command issued.', notify);
