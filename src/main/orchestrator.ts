@@ -141,7 +141,7 @@ export class Orchestrator {
       if (eq === -1) continue
       const key = line.slice(0, eq).trim()
       let val = line.slice(eq + 1).trim()
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      if ((val.startsWith("'") && val.endsWith("'")) || (val.startsWith('"') && val.endsWith('"'))) {
         val = val.slice(1, -1)
       }
       out[key] = val
@@ -269,42 +269,18 @@ export class Orchestrator {
     await this.execStream(c, args, targetDir, notify, true)
   }
 
-  // 추가 의존성: Nest/TypeORM/mysql2, Nest CLI
-  private async ensureServerExtras(serverDir: string, notify?: (s: LaunchStatus) => void) {
-    const pkg = this.readJsonIfExists(path.join(serverDir, 'package.json')) || { dependencies:{}, devDependencies:{} }
-    const deps = pkg.dependencies || {}
-    const devDeps = pkg.devDependencies || {}
-    const needRuntime = ['@nestjs/typeorm','typeorm','mysql2'].filter(lib => !deps[lib] && !devDeps[lib])
-    const needDev = ['@nestjs/cli'].filter(lib => !deps[lib] && !devDeps[lib])
-    const pm = this.detectPM(serverDir)
-    if (needRuntime.length) {
-      const [bin, base] = pm.addCmd(false)
-      this.log(`[deps-extra] ${needRuntime.join(' ')} @ server`, notify)
-      await this.execStream(bin, [...base, ...needRuntime], serverDir, notify, true)
-    } else {
-      this.log('[deps-extra] runtime OK (@nestjs/typeorm, typeorm, mysql2)', notify)
-    }
-    if (needDev.length) {
-      const [bin, base] = pm.addCmd(true)
-      this.log(`[deps-extra] -D ${needDev.join(' ')} @ server`, notify)
-      await this.execStream(bin, [...base, ...needDev], serverDir, notify, true)
-    } else {
-      this.log('[deps-extra] dev OK (@nestjs/cli)', notify)
-    }
+  private async execElevated(cmd: string, args: string[], notify?: (s: LaunchStatus)=>void) {
+    const argString = args.map(arg => `'${arg.replace(/'/g, "'''")}'`).join(',');
+    // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
+    // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
+    const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath \"${cmd}\" -ArgumentList @(${argString}); exit $p.ExitCode`;
+    
+    await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
   }
 
   // ---------- Windows: MySQL 설치 / 서비스 시작 ----------
   private async ensureMySQLOnWindows(notify?: (s: LaunchStatus)=>void) {
     if (process.platform !== 'win32') return
-
-    const execElevated = async (cmd: string, args: string[]) => {
-      const argString = args.map(arg => `'${arg.replace(/'/g, "''")}'`).join(',');
-      // -PassThru는 프로세스 객체를 반환합니다. 이 객체의 ExitCode를 받아와서 스크립트의 종료 코드로 사용합니다.
-      // 이를 통해 관리자 권한으로 실행된 프로세스의 실패 여부를 정확히 알 수 있습니다.
-      const psCommand = `$p = Start-Process -Verb RunAs -Wait -PassThru -FilePath "${cmd}" -ArgumentList @(${argString}); exit $p.ExitCode`;
-      
-      await this.execStream('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand], process.cwd(), notify, true);
-    }
 
     // mysql 클라이언트 존재 확인
     let hasMysql = false
@@ -324,7 +300,7 @@ export class Orchestrator {
         for (const [id, extra] of candidates) {
           try {
             this.log(`[mysql] Attempting to install ${id} via winget...`, notify);
-            await execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra]);
+            await this.execElevated('winget', ['install', '-e', '--id', id, '--silent', '--accept-package-agreements', ...extra], notify);
             // 설치 후 다시 확인
             try { await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() }); hasMysql = true } catch {}
             if (hasMysql) {
@@ -344,7 +320,7 @@ export class Orchestrator {
         if (chocoOk) {
           try {
             // choco로 mysql 설치 시 root 비밀번호를 빈 문자열로 설정 ('/Password:""')
-            await execElevated('choco', ['install', 'mysql', '-y', '--params', '"/Password:"""']);
+            await this.execElevated('choco', ['install', 'mysql', '-y', '--params', `'"/Password:""'`], notify);
             // 설치 성공 여부를 직접 확인
             try {
               await this.execChecked('where', ['mysql'], { env: this.envWithDefaultPath() });
@@ -370,11 +346,76 @@ export class Orchestrator {
         this.log('[mysql] Attempting to start MySQL service with elevation...', notify);
         const startSvc = `Get-Service -Name 'MySQL*' | Where-Object { $_.Status -ne 'Running' } | Start-Service -PassThru`;
         const encodedStartSvc = Buffer.from(startSvc, 'utf16le').toString('base64');
-        await execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc]);
+        await this.execElevated('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedStartSvc], notify);
         this.log('[mysql] service start command issued (if installed and not running).', notify)
       } catch (e: any) {
         this.log(`[mysql] 서비스 시작 실패. 이미 실행 중이거나, 설치에 문제가 있을 수 있습니다. Error: ${e?.message || e}`, notify)
       }
+    }
+  }
+
+  // ---------- Windows: Redis 설치 / 서비스 시작 ----------
+  private async ensureRedisOnWSL(notify?: (s: LaunchStatus)=>void) {
+    if (process.platform !== 'win32') return
+
+    // 1. Check if WSL is installed
+    this.log('[redis-wsl] Checking for WSL...', notify);
+    try {
+      await this.execChecked('wsl', ['--status'], { env: this.envWithDefaultPath() });
+    } catch {
+      throw new Error('WSL is not installed or not available in PATH. Please install WSL and a Linux distribution.');
+    }
+
+    // 2. Check if redis-cli is available and if server is running inside WSL
+    this.log('[redis-wsl] Checking for Redis inside WSL...', notify);
+    try {
+      await this.execStream('wsl', ['redis-cli', 'ping'], process.cwd(), notify);
+      this.log('[redis-wsl] Redis is already running inside WSL.', notify);
+      return; // It's running, so we're done.
+    } catch (e: any) {
+      this.log(`[redis-wsl] Redis is not running or not found in WSL. Attempting installation...`, notify)
+    }
+
+    // 3. If not running, try to install via apt-get in WSL
+    this.log('[redis-wsl] Updating apt-get and installing redis-server in WSL...', notify);
+    try {
+        // This might ask for a password if sudo requires it.
+        await this.execStream('wsl', ['sudo', 'apt-get', 'update'], process.cwd(), notify);
+        await this.execStream('wsl', ['sudo', 'apt-get', 'install', '-y', 'redis-server'], process.cwd(), notify);
+        this.log('[redis-wsl] Redis installation complete in WSL.', notify);
+    } catch (installErr: any) {
+        this.log(`[redis-wsl] Redis installation in WSL failed: ${installErr.message}`, notify);
+        throw new Error('Failed to install Redis in WSL. Please ensure you have a WSL distribution with apt-get and sudo privileges.');
+    }
+
+    // 4. Start the Redis service inside WSL
+    this.log('[redis-wsl] Attempting to start Redis service inside WSL...', notify);
+    try {
+        await this.execStream('wsl', ['sudo', 'service', 'redis-server', 'start'], process.cwd(), notify);
+        this.log('[redis-wsl] Redis service start command issued in WSL.', notify);
+    } catch (e: any) {
+        this.log(`[redis-wsl] Failed to start Redis service in WSL: ${e.message}.`, notify);
+        throw new Error('Failed to start Redis service in WSL.');
+    }
+
+    // 5. Final check with retry
+    this.log('[redis-wsl] Verifying Redis status after starting service...', notify);
+    let attempts = 5;
+    while (attempts > 0) {
+        try {
+            await this.execStream('wsl', ['redis-cli', 'ping'], process.cwd(), notify);
+            this.log('[redis-wsl] Redis is now running in WSL.', notify);
+            return; // Success
+        } catch (e: any) {
+            attempts--;
+            if (attempts > 0) {
+                this.log(`[redis-wsl] Ping failed. Retrying in 2 seconds... (${attempts} attempts left)`, notify);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s
+            } else {
+                this.log(`[redis-wsl] Failed to verify Redis status after multiple attempts: ${e.message}`, notify);
+                throw new Error('Failed to verify Redis status in WSL. It may require manual intervention.');
+            }
+        }
     }
   }
 
@@ -426,6 +467,92 @@ export class Orchestrator {
     return { cmd: 'npx', args: ['nest', 'start', '--watch'], label: 'npx nest (fallback)' }
   }
 
+  private async startSpringServer(serverDir: string, envFromFiles: Record<string, string>, notify?: (s: LaunchStatus) => void) {
+    this.log('[spring] Starting Spring Boot server setup...', notify);
+
+    // 1. Windows-only logic
+    if (process.platform !== 'win32') {
+        this.log('[spring] Skipping Spring Boot server start on non-Windows platform.', notify);
+        throw new Error('Spring Boot server launch is currently only supported on Windows.');
+    }
+
+    // 2. Check for Java, install if necessary via Chocolatey
+    this.log('[spring] Checking for Java...', notify);
+    try {
+        await this.execChecked('java', ['-version'], { env: this.envWithDefaultPath() });
+        this.log('[spring] Java is already installed.', notify);
+    } catch {
+        this.log('[spring] Java not found. Checking for Chocolatey...', notify);
+        try {
+            await this.execChecked('choco', ['--version'], { env: this.envWithDefaultPath() });
+            this.log('[spring] Chocolatey found. Installing OpenJDK 17...', notify);
+            await this.execStream('choco', ['install', 'openjdk17', '-y'], process.cwd(), notify, true);
+            this.log('[spring] OpenJDK 17 installation complete. Please restart the application to use the new Java environment.', notify);
+            throw new Error('Java has been installed. Please restart the application.');
+        } catch (chocoErr: any) {
+            this.log(`[spring] Chocolatey check/install failed: ${chocoErr.message}`, notify);
+            throw new Error('Java is not installed and Chocolatey is not found/failed. Please install Java 17 or Chocolatey first.');
+        }
+    }
+
+    // 3. Verify it's a Gradle project
+    this.log(`[spring] Using Spring project path: ${serverDir}`, notify);
+    const gradlewPath = path.join(serverDir, 'gradlew.bat');
+    try {
+        await fs.promises.access(gradlewPath);
+    } catch {
+        throw new Error(`"gradlew.bat" not found in the provided server directory: ${serverDir}`);
+    }
+
+    // 4. Create .env file for Spring project
+    this.log('[spring] Creating .env file for Spring project...', notify);
+    try {
+        const rootEnvPath = path.join(this.app.getAppPath(), '.env');
+        if (!fs.existsSync(rootEnvPath)) {
+            throw new Error('Root .env file not found.');
+        }
+        const rootEnvContent = await fs.promises.readFile(rootEnvPath, 'utf-8');
+        const lines = rootEnvContent.split('\n');
+        const separator = '# 프론트 공통 변수';
+        const separatorIndex = lines.findIndex(line => line.trim() === separator);
+        
+        const springEnvContent = separatorIndex !== -1 
+            ? lines.slice(0, separatorIndex).join('\n')
+            : rootEnvContent;
+
+        const springEnvPath = path.join(serverDir, '.env');
+        await fs.promises.writeFile(springEnvPath, springEnvContent);
+        this.log(`[spring] Successfully created .env file at ${springEnvPath}`, notify);
+    } catch (error: any) {
+        throw new Error(`Failed to create .env file for Spring project: ${error.message}`);
+    }
+
+    // 5. Build the project with Gradle
+    this.log('[spring] Building Spring Boot project with Gradle... This may take a few minutes.', notify);
+    await this.execStream(gradlewPath, ['clean', 'build'], serverDir, notify, true);
+    this.log('[spring] Gradle build finished.', notify);
+
+    // 6. Find the built JAR file
+    const libsDir = path.join(serverDir, 'build', 'libs');
+    const jarFiles = (await fs.promises.readdir(libsDir)).filter(f => f.endsWith('.jar') && !f.endsWith('-plain.jar'));
+    if (jarFiles.length === 0) {
+        throw new Error('No executable JAR file found in build/libs directory.');
+    }
+    const jarFile = jarFiles[0];
+    const jarPath = path.join(libsDir, jarFile);
+    this.log(`[spring] Found JAR file: ${jarFile}`, notify);
+
+    // 7. Run the Spring Boot application
+    this.log('[spring] Starting Spring Boot application...', notify);
+    this.server = {
+        proc: spawn('java', ['-jar', jarPath], { cwd: serverDir, shell: false, env: this.envWithDefaultPath(envFromFiles) }),
+        cwd: serverDir
+    };
+    this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify));
+    this.server.proc?.stderr?.on('data', (d) => this.log(`[server:err] ${d.toString().trim()}`, notify));
+    this.server.proc?.on('exit', (code, signal) => this.log(`[server] exited (code=${code}, signal=${signal})`, notify));
+  }
+
   // ---------- main flow ----------
   async start(config: RepoConfig, notify?: (s: LaunchStatus) => void) {
     try {
@@ -447,63 +574,54 @@ export class Orchestrator {
       await this.ensureTools()
 
       this.update({ step: 'preparing', message: 'Preparing workspace...' }, notify)
-      const { serverDir, frontDir } = await this.ensureWorkspace(config.workspaceDir)
+      const { frontDir } = await this.ensureWorkspace(config.workspaceDir)
 
       this.update({ step: 'cloning', message: 'Syncing repositories...' }, notify)
-      await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
+      // await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
       await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
 
       await this.createFrontendEnvFiles(frontDir, notify)
 
-      this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
-
-      // Clean up node_modules to ensure a clean install, especially for PnP projects
-      this.log('[deps] Cleaning up existing node_modules directories...', notify);
-      fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
+      this.update({ step: 'installing', message: 'Installing frontend dependencies...' }, notify)
+      // Clean up node_modules to ensure a clean install
       fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
-      await this.installDeps(serverDir, config.server.installCommand, notify)
       await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
-      // 서버 런타임/CLI 보강
-      await this.ensureServerExtras(serverDir, notify)
+      this.log('[deps] Installing missing peer dependency for framer-motion...', notify)
+      try {
+        const pm = this.detectPM(frontDir)
+        const [cmd, baseArgs] = pm.addCmd()
+        await this.execStream(cmd, [...baseArgs, '@emotion/is-prop-valid'], frontDir, notify, true)
+      } catch (e: any) {
+        this.log(`[deps] Failed to install peer dependency: ${e.message}`, notify)
+        // Do not re-throw, as it might not be critical
+      }
 
+      /*
       // Windows: MySQL 설치/서비스
       await this.ensureMySQLOnWindows(notify)
+
+      // Windows: Redis 설치/서비스 (WSL)
+      await this.ensureRedisOnWSL(notify)
 
       // 환경 변수 수집
       const envFromFiles = this.loadServerEnv(serverDir)
       const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
       const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
       const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
-      // UI에서 받은 비밀번호를 최우선으로 사용하고, 그 다음 .env 파일, 마지막으로 빈 문자열을 사용
-      const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
+      const dbPass = config.server.dbPassword != null ? config.server.dbPassword : (envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || '')
       const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
 
       // DB 생성 시도
       await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
-
-      // .env 병합/기록 (TypeORM에서 자주 쓰는 키 + DATABASE_URL)
-      const databaseUrl = `mysql://${encodeURIComponent(dbUser)}:${encodeURIComponent(dbPass)}@${dbHost}:${dbPort}/${dbName}`
-      this.mergeWriteEnv(serverDir, {
-        DB_HOST: dbHost,
-        DB_PORT: String(dbPort),
-        DB_NAME: dbUser,
-        DB_PASSWORD: dbPass,
-        DB_DATABASE: dbName,
-      }, notify)
+      */
 
       this.update({ step: 'starting', message: 'Starting processes...' }, notify)
 
-      // 서버 시작
-      const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
-      this.log(`[start] server via ${srv.label}`, notify)
-      this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: process.platform === 'win32', env: this.envWithDefaultPath(envFromFiles) }),
-        cwd: serverDir
-      }
-      this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
-      this.server.proc?.stderr?.on('data', (d) => this.log(`[server:err] ${d.toString().trim()}`, notify))
-      this.server.proc?.on('exit', (code, signal) => this.log(`[server] exited (code=${code}, signal=${signal})`, notify))
+      /*
+      // 서버 시작 (Spring Boot)
+      await this.startSpringServer(serverDir, envFromFiles, notify);
+      */
 
       // 프론트 시작
       const fe = await this.resolveStartCommand(frontDir, config.frontend.startCommand)
@@ -519,7 +637,7 @@ export class Orchestrator {
       this.update({
         step: 'running',
         message: 'Running',
-        serverPid: this.server.proc?.pid ?? null,
+        serverPid: null, //서버 프로세스 비활성화
         frontendPid: this.frontend.proc?.pid ?? null
       }, notify)
 
