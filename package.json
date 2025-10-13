@@ -29,6 +29,16 @@
       "package.json",
       "!**/ffmpeg*"
     ],
+    "extraFiles": [
+      {
+        "from": "resources/jre",
+        "to": "jre"
+      },
+      {
+        "from": "resources/server.jar",
+        "to": "server.jar"
+      }
+    ],
     "npmRebuild": false,
     "directories": {
       "output": "release"

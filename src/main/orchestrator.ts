@@ -843,40 +843,126 @@ export class Orchestrator {
       this.update({ step: 'preparing', message: 'Preparing workspace...' }, notify)
       const { serverDir, frontDir } = await this.ensureWorkspace(config.workspaceDir)
 
-      this.update({ step: 'cloning', message: 'Syncing repositories...' }, notify)
-      await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
-      await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
+      // 내장 JAR가 있으면 서버 클론 건너뛰기
+      const bundledServerJar = path.join(appPath, '..', 'server.jar')
+      
+      if (fs.existsSync(bundledServerJar)) {
+        this.log('[clone] 내장 서버 JAR 사용 - 서버 저장소 클론 생략', notify)
+        this.update({ step: 'cloning', message: 'Syncing frontend repository...' }, notify)
+        await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
+      } else {
+        this.update({ step: 'cloning', message: 'Syncing repositories...' }, notify)
+        await this.cloneOrPull(serverDir, config.server.url, config.server.branch, notify)
+        await this.cloneOrPull(frontDir, config.frontend.url, config.frontend.branch, notify)
+      }
 
       await this.createFrontendEnvFiles(frontDir, notify)
 
-      this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
+      // 내장 JAR 사용 시 서버 의존성 설치 생략
+      if (fs.existsSync(bundledServerJar)) {
+        this.log('[deps] 내장 서버 JAR 사용 - 서버 의존성 설치 생략', notify)
+        this.update({ step: 'installing', message: 'Installing frontend dependencies...' }, notify)
+        
+        // 프론트엔드 의존성만 설치
+        this.log('[deps] Cleaning up frontend node_modules...', notify);
+        fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
+        await this.installDeps(frontDir, config.frontend.installCommand, notify)
+      } else {
+        this.update({ step: 'installing', message: 'Installing dependencies...' }, notify)
+        
+        // 전체 의존성 설치 (기존 방식)
+        this.log('[deps] Cleaning up existing node_modules directories...', notify);
+        fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
+        fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
+        await this.installDeps(serverDir, config.server.installCommand, notify)
+        await this.installDeps(frontDir, config.frontend.installCommand, notify)
 
-      // Clean up node_modules to ensure a clean install, especially for PnP projects
-      this.log('[deps] Cleaning up existing node_modules directories...', notify);
-      fs.rmSync(path.join(serverDir, 'node_modules'), { recursive: true, force: true });
-      fs.rmSync(path.join(frontDir, 'node_modules'), { recursive: true, force: true });
-      await this.installDeps(serverDir, config.server.installCommand, notify)
-      await this.installDeps(frontDir, config.frontend.installCommand, notify)
+        // 서버 런타임/CLI 보강
+        await this.ensureServerExtras(serverDir, notify)
+      }
 
-      // 서버 런타임/CLI 보강
-      await this.ensureServerExtras(serverDir, notify)
+      // 내장 JAR 사용 시 DB 설정 간소화
+      if (fs.existsSync(bundledServerJar)) {
+        this.log('[db] 내장 서버 JAR 사용 - 기본 DB 설정 적용', notify)
+        
+        // 기본 DB 설정
+        const dbHost = '127.0.0.1'
+        const dbPort = 3306
+        const dbUser = 'root'
+        const dbPass = config.server.dbPassword || ''
+        const dbName = 'mozu'
+        
+        // 간단한 환경변수 설정
+        const envVars: Record<string, string> = {
+          DB_HOST: dbHost,
+          DB_PORT: String(dbPort),
+          DB_NAME: dbName,
+          DB_USERNAME: dbUser,
+          DB_PASSWORD: dbPass,
+          
+          // Spring Boot 기본 설정
+          JPA_SHOW_SQL: 'true',
+          JPA_FORMAT_SQL: 'true',
+          JPA_HIBERNATE_DDL_AUTO: 'update',
+          REDIS_HOST: 'localhost',
+          REDIS_PORT: '6379',
+          JWT_SECRET: 'mozu-development-secret-key-change-in-production',
+          ACCESS_EXP: '3600',
+          REFRESH_EXP: '86400',
+          STUDENT_ACCESS_EXP: '7200',
+        }
+        
+        // 프론트엔드 폴더에 .env 생성 (간소화된 버전)
+        this.mergeWriteEnv(frontDir, envVars, notify)
+        
+      } else {
+        // 기존 복잡한 DB 설정 프로세스
+        await this.ensureMySQLOnWindows(notify)
 
-      // Windows: MySQL 설치/서비스
-      await this.ensureMySQLOnWindows(notify)
+        const envFromFiles = this.loadServerEnv(serverDir)
+        const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
+        const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
+        const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
+        const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
+        const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
 
-      // 환경 변수 수집
-      const envFromFiles = this.loadServerEnv(serverDir)
-      const dbHost = envFromFiles.DB_HOST || envFromFiles.MYSQL_HOST || '127.0.0.1'
-      const dbPort = Number(envFromFiles.DB_PORT || envFromFiles.MYSQL_PORT || 3306)
-      const dbUser = envFromFiles.DB_USERNAME || envFromFiles.MYSQL_USER || 'root'
-      // UI에서 받은 비밀번호를 최우선으로 사용하고, 그 다음 .env 파일, 마지막으로 빈 문자열을 사용
-      const dbPass = config.server.dbPassword || envFromFiles.DB_PASSWORD || envFromFiles.DB_ROOT_PASSWORD || envFromFiles.MYSQL_ROOT_PASSWORD || ''
-      const dbName = envFromFiles.DB_DATABASE || envFromFiles.MYSQL_DATABASE || 'mozu'
-
-      // DB 생성 시도
-      await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
-
-      // .env 병합/기록 (TypeORM + Spring Boot 환경변수)
+        await this.createDatabaseIfNeeded({ host: dbHost, port: dbPort, user: dbUser, password: dbPass, database: dbName }, notify)
+        
+        // 전체 환경변수 설정 (기존 방식)
+        const envVars: Record<string, string> = {
+          DB_HOST: dbHost,
+          DB_PORT: String(dbPort),
+          DB_NAME: dbName,
+          DB_USERNAME: dbUser,
+          DB_PASSWORD: dbPass,
+        }
+        
+        const serverHasGradleBuild = fs.existsSync(path.join(serverDir, 'build.gradle')) || 
+                                    fs.existsSync(path.join(serverDir, 'build.gradle.kts'))
+        
+        if (serverHasGradleBuild) {
+          Object.assign(envVars, {
+            JPA_SHOW_SQL: 'true',
+            JPA_FORMAT_SQL: 'true',
+            JPA_HIBERNATE_DDL_AUTO: 'update',
+            REDIS_HOST: 'localhost',
+            REDIS_PORT: '6379',
+            HEADER: 'Authorization',
+            PREFIX: 'Bearer ',
+            JWT_SECRET: 'mozu-development-secret-key-change-in-production',
+            ACCESS_EXP: '3600',
+            REFRESH_EXP: '86400',
+            STUDENT_ACCESS_EXP: '7200',
+            BUCKET_NAME: 'mozu-dev-bucket',
+            MOZU_IMAGE_FOLDER: 'images/',
+            AWS_REGION: 'ap-northeast-2',
+            AWS_ACCESS_KEY_ID: 'dummy-access-key',
+            AWS_SECRET_ACCESS_KEY: 'dummy-secret-key',
+          })
+        }
+        
+        this.mergeWriteEnv(serverDir, envVars, notify)
+      }
       
       // Gradle 프로젝트인지 확인 (Spring Boot)
       const hasGradleBuild = fs.existsSync(path.join(serverDir, 'build.gradle')) || 
@@ -939,57 +1025,89 @@ export class Orchestrator {
         }
       }
       
-      // 서버 시작 전 빌드 단계 추가
-      const serverHasGradleBuild = fs.existsSync(path.join(serverDir, 'build.gradle')) || 
-                                  fs.existsSync(path.join(serverDir, 'build.gradle.kts'))
+      // 내장 JAR 사용 시 빌드 과정 건너뛰기
+      const appPath = this.app.getAppPath()
+      const bundledServerJar = path.join(appPath, '..', 'server.jar')
       
-      if (serverHasGradleBuild) {
-        this.log(`[build] 서버 빌드 시작...`, notify)
-        this.updateServer('building', '서버를 빌드하고 있습니다...', notify)
+      if (fs.existsSync(bundledServerJar)) {
+        this.log(`[build] 내장 서버 JAR 사용 - 빌드 과정 생략`, notify)
+        this.updateServer('running', '내장 서버 JAR 사용', notify)
+      } else {
+        // 내장 JAR가 없는 경우 기존 빌드 프로세스 진행
+        const serverHasGradleBuild = fs.existsSync(path.join(serverDir, 'build.gradle')) || 
+                                    fs.existsSync(path.join(serverDir, 'build.gradle.kts'))
         
-        try {
-          // 먼저 시스템에 설치된 Gradle 사용 시도
-          let useSystemGradle = false
+        if (serverHasGradleBuild) {
+          this.log(`[build] 서버 빌드 시작...`, notify)
+          this.updateServer('building', '서버를 빌드하고 있습니다...', notify)
+          
           try {
-            await this.execChecked('gradle', ['--version'], { cwd: serverDir, env: this.envWithDefaultPath() })
-            useSystemGradle = true
-            this.log('[build] 시스템 설치된 Gradle 사용', notify)
-          } catch (e) {
-            this.log('[build] 시스템 Gradle 없음, gradlew 사용 시도', notify)
-          }
-          
-          if (useSystemGradle) {
-            this.log(`[build] gradle build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
-            await this.execStream('gradle', ['build', '--info', '--stacktrace'], serverDir, notify, false, updatedEnvFromFiles)
-          } else {
-            const gradlewPath = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
-            
-            if (fs.existsSync(path.join(serverDir, 'gradlew'))) {
-              this.log(`[build] ${gradlewPath} build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
-              this.log('[build] Gradle wrapper 다운로드 중... (최대 5분 소요 가능)', notify)
-              await this.execStream(gradlewPath, ['build', '--info', '--stacktrace', '-Dorg.gradle.internal.network.timeout=300000'], serverDir, notify, false, updatedEnvFromFiles)
-            } else {
-              throw new Error('gradlew 파일이 없고 시스템 Gradle도 설치되지 않았습니다.')
+            // 먼저 시스템에 설치된 Gradle 사용 시도
+            let useSystemGradle = false
+            try {
+              await this.execChecked('gradle', ['--version'], { cwd: serverDir, env: this.envWithDefaultPath() })
+              useSystemGradle = true
+              this.log('[build] 시스템 설치된 Gradle 사용', notify)
+            } catch (e) {
+              this.log('[build] 시스템 Gradle 없음, gradlew 사용 시도', notify)
             }
+            
+            if (useSystemGradle) {
+              this.log(`[build] gradle build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
+              await this.execStream('gradle', ['build', '--info', '--stacktrace'], serverDir, notify, false, updatedEnvFromFiles)
+            } else {
+              const gradlewPath = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
+              
+              if (fs.existsSync(path.join(serverDir, 'gradlew'))) {
+                this.log(`[build] ${gradlewPath} build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
+                this.log('[build] Gradle wrapper 다운로드 중... (최대 5분 소요 가능)', notify)
+                await this.execStream(gradlewPath, ['build', '--info', '--stacktrace', '-Dorg.gradle.internal.network.timeout=300000'], serverDir, notify, false, updatedEnvFromFiles)
+              } else {
+                throw new Error('gradlew 파일이 없고 시스템 Gradle도 설치되지 않았습니다.')
+              }
+            }
+            
+            this.log(`[build] ✅ 서버 빌드 완료`, notify)
+            this.updateServer('building', '서버 빌드 완료', notify)
+          } catch (buildError) {
+            this.log(`[build] ❌ 서버 빌드 실패: ${buildError}`, notify)
+            this.updateServer('error', '서버 빌드 실패', notify)
+            throw buildError
           }
-          
-          this.log(`[build] ✅ 서버 빌드 완료`, notify)
-          this.updateServer('building', '서버 빌드 완료', notify)
-        } catch (buildError) {
-          this.log(`[build] ❌ 서버 빌드 실패: ${buildError}`, notify)
-          this.updateServer('error', '서버 빌드 실패', notify)
-          throw buildError
         }
       }
 
       this.log(`[start] 빌드 완료, 서버 시작 중...`, notify)
       this.updateServer('starting', '서버를 시작하고 있습니다...', notify)
       
-      const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
-      this.log(`[start] server via ${srv.label}`, notify)
-      this.server = {
-        proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: process.platform === 'win32', env: this.envWithDefaultPath(updatedEnvFromFiles) }),
-        cwd: serverDir
+      // 내장 JRE와 JAR 파일을 사용하여 서버 실행
+      const bundledJavaPath = process.platform === 'win32' 
+        ? path.join(appPath, '..', 'jre', 'bin', 'java.exe')
+        : path.join(appPath, '..', 'jre', 'bin', 'java')
+      
+      // 내장 JRE와 JAR가 존재하는지 확인
+      if (fs.existsSync(bundledJavaPath) && fs.existsSync(bundledServerJar)) {
+        this.log(`[start] 내장 JRE와 서버 JAR 사용`, notify)
+        this.log(`[start] Java: ${bundledJavaPath}`, notify)
+        this.log(`[start] JAR: ${bundledServerJar}`, notify)
+        
+        this.server = {
+          proc: spawn(bundledJavaPath, ['-jar', bundledServerJar], { 
+            cwd: serverDir, 
+            shell: false, 
+            env: this.envWithDefaultPath(updatedEnvFromFiles) 
+          }),
+          cwd: serverDir
+        }
+      } else {
+        // 기존 방식으로 폴백
+        this.log(`[start] 내장 JRE/JAR 없음, 기존 방식 사용`, notify)
+        const srv = await this.resolveStartCommand(serverDir, config.server.startCommand)
+        this.log(`[start] server via ${srv.label}`, notify)
+        this.server = {
+          proc: spawn(srv.cmd, srv.args, { cwd: serverDir, shell: process.platform === 'win32', env: this.envWithDefaultPath(updatedEnvFromFiles) }),
+          cwd: serverDir
+        }
       }
       this.server.proc?.stdout?.on('data', (d) => this.log(`[server] ${d.toString().trim()}`, notify))
       this.server.proc?.stderr?.on('data', (d) => {
