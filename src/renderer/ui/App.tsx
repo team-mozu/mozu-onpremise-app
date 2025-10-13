@@ -29,7 +29,7 @@ const FIXED_CFG: RepoCfg = {
   },
   frontend: {
     url: 'https://github.com/team-mozu/mozu-FE.git',
-    branch: 'release/MZFE-47-2.0.0-rc2',
+    branch: 'develop',
     startCommand: 'yarn dev',
     installCommand: 'yarn install',
     cwdName: 'frontend',
