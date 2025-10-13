@@ -22,12 +22,14 @@
   },
   "build": {
     "appId": "com.mozu.onpremise.launcher",
-    "productName": "Mozu 모의주식 실습환경",
+    "productName": "Mozu Stock Environment",
     "copyright": "Copyright © 2024 Mozu Team",
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!**/ffmpeg*"
     ],
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
@@ -43,16 +45,14 @@
         {
           "target": "nsis",
           "arch": [
-            "x64",
-            "ia32"
+            "x64"
           ]
-        },
-        "portable"
+        }
       ],
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "artifactName": "mozu-onpremise-setup-${version}.${ext}",
-      "publisherName": "Mozu Team"
+      "artifactName": "Mozu-OnPremise-Setup-${version}.${ext}",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
@@ -62,9 +62,8 @@
       "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Mozu 모의주식 실습환경",
-      "include": "assets/installer.nsh",
-      "language": "2052"
+      "shortcutName": "Mozu Stock Environment",
+      "include": "assets/installer.nsh"
     },
     "linux": {
       "target": [

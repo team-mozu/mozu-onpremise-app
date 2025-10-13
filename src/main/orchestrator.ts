@@ -948,14 +948,29 @@ export class Orchestrator {
         this.updateServer('building', '서버를 빌드하고 있습니다...', notify)
         
         try {
-          const gradlewPath = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
+          // 먼저 시스템에 설치된 Gradle 사용 시도
+          let useSystemGradle = false
+          try {
+            await this.execChecked('gradle', ['--version'], { cwd: serverDir, env: this.envWithDefaultPath() })
+            useSystemGradle = true
+            this.log('[build] 시스템 설치된 Gradle 사용', notify)
+          } catch (e) {
+            this.log('[build] 시스템 Gradle 없음, gradlew 사용 시도', notify)
+          }
           
-          if (fs.existsSync(path.join(serverDir, 'gradlew'))) {
-            this.log(`[build] ${gradlewPath} build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
-            await this.execStream(gradlewPath, ['build', '--info', '--stacktrace'], serverDir, notify, false, updatedEnvFromFiles)
-          } else {
+          if (useSystemGradle) {
             this.log(`[build] gradle build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
             await this.execStream('gradle', ['build', '--info', '--stacktrace'], serverDir, notify, false, updatedEnvFromFiles)
+          } else {
+            const gradlewPath = process.platform === 'win32' ? 'gradlew.bat' : './gradlew'
+            
+            if (fs.existsSync(path.join(serverDir, 'gradlew'))) {
+              this.log(`[build] ${gradlewPath} build --info --stacktrace @ ${path.basename(serverDir)}`, notify)
+              this.log('[build] Gradle wrapper 다운로드 중... (최대 5분 소요 가능)', notify)
+              await this.execStream(gradlewPath, ['build', '--info', '--stacktrace', '-Dorg.gradle.internal.network.timeout=300000'], serverDir, notify, false, updatedEnvFromFiles)
+            } else {
+              throw new Error('gradlew 파일이 없고 시스템 Gradle도 설치되지 않았습니다.')
+            }
           }
           
           this.log(`[build] ✅ 서버 빌드 완료`, notify)
