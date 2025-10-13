@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { RepoConfig, LaunchStatus } from '../shared/types'
 
 // 화이트리스트 채널 (메인에서 실제로 쓰는 채널만 노출)
-const INVOKE_CHANNELS = new Set(['choose-dir', 'start-mock', 'stop-mock'] as const)
+const INVOKE_CHANNELS = new Set(['choose-dir', 'start-mock', 'stop-mock', 'open-external'] as const)
 const ON_CHANNELS = new Set(['status-update'] as const)
 
 function safeInvoke<T = any>(channel: string, ...args: any[]): Promise<T> {
@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   chooseDir: (): Promise<string | null> => safeInvoke('choose-dir'),
   startMock: (config: RepoConfig): Promise<{ ok: boolean; error?: string }> => safeInvoke('start-mock', config),
   stopMock: (): Promise<{ ok: boolean }> => safeInvoke('stop-mock'),
+  openExternal: (url: string): Promise<void> => safeInvoke('open-external', url),
   onStatusUpdate
 })
 
@@ -48,6 +49,7 @@ declare global {
       chooseDir: () => Promise<string | null>
       startMock: (config: RepoConfig) => Promise<{ ok: boolean; error?: string }>
       stopMock: () => Promise<{ ok: boolean }>
+      openExternal: (url: string) => Promise<void>
       onStatusUpdate: (cb: (status: LaunchStatus) => void) => () => void
     }
   }

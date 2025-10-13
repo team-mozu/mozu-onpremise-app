@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'path'
 import { URL } from 'url'
 import { Orchestrator } from './orchestrator'
@@ -130,9 +130,24 @@ app.on('window-all-closed', () => {
 
 /** ---------- IPC ---------- */
 ipcMain.handle('choose-dir', async () => {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+  const result = await dialog.showOpenDialog({ 
+    properties: ['openDirectory', 'createDirectory'],
+    title: '프로젝트 저장 폴더 선택',
+    message: 'mozu 프로젝트 파일들이 저장될 폴더를 선택해주세요',
+    buttonLabel: '선택'
+  })
   if (result.canceled || result.filePaths.length === 0) return null
-  return result.filePaths[0]
+  
+  const selectedPath = result.filePaths[0]
+  
+  // 선택된 폴더의 접근 권한 확인
+  try {
+    await fs.promises.access(selectedPath, fs.constants.R_OK | fs.constants.W_OK)
+    return selectedPath
+  } catch (err) {
+    console.error('Selected directory is not accessible:', err)
+    return null
+  }
 })
 
 ipcMain.handle('start-mock', async (_e, config: RepoConfig) => {
@@ -169,4 +184,12 @@ ipcMain.handle('stop-mock', async () => {
   if (!orchestrator) return { ok: true }
   await orchestrator.stop()
   return { ok: true }
+})
+
+ipcMain.handle('open-external', async (_e, url: string) => {
+  try {
+    await shell.openExternal(url)
+  } catch (err) {
+    console.error('Failed to open external URL:', err)
+  }
 })
