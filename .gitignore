@@ -17,3 +17,7 @@ pnpm-debug.log*
 .vscode/
 
 .env
+
+# Large bundled resources (excluded for GitHub size limits)
+resources/jre/
+resources/*.jar
