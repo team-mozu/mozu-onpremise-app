@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from './components/Button'
 import { LogPanel } from './components/LogPanel'
 import logo from '../assets/logo.svg'
@@ -11,6 +11,7 @@ declare global {
     api: {
       chooseDir: () => Promise<string | null>
       startMock: (cfg: RepoCfg) => Promise<{ ok: boolean, error?: string }>
+      startLesson: (cfg: RepoCfg) => Promise<{ ok: boolean, error?: string }>
       stopMock: () => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<void>
       onStatusUpdate: (cb: (status: LaunchStatus) => void) => () => void
@@ -20,13 +21,6 @@ declare global {
 
 // 하드코딩된 설정 (필요시 여기만 수정)
 const FIXED_CFG: RepoCfg = {
-  server: {
-    url: 'https://github.com/team-mozu/mozu-BE-v2.git',
-    branch: 'develop',
-    startCommand: './gradlew bootRun',
-    installCommand: './gradlew build',
-    cwdName: 'server',
-  },
   frontend: {
     url: 'https://github.com/team-mozu/mozu-FE.git',
     branch: 'main',
@@ -34,86 +28,93 @@ const FIXED_CFG: RepoCfg = {
     installCommand: 'yarn install',
     cwdName: 'frontend',
     devUrl: 'http://localhost:3000',
-  },
+  }
 }
 
 function getErrorSolution(error: string): { title: string; message: string; solutions: string[]; links?: { text: string; url: string }[] } {
-  if (error.includes('Access denied') || error.includes('password')) {
-    return {
-      title: '데이터베이스 접속 실패',
-      message: '데이터베이스에 접속할 수 없습니다.',
-      solutions: [
-        '1. 데이터베이스 비밀번호를 다시 확인해주세요',
-        '2. 비밀번호를 설정하지 않았다면 입력창을 비워두세요',
-        '3. MySQL이 실행 중인지 확인해주세요'
-      ]
-    }
-  }
-
-  if (error.includes('git') || error.includes('설치되지 않았거나')) {
+  // Git 관련 오류
+  if (error.includes('git') || error.includes('설치되지 않았거나') || error.includes('Git이 설치되지 않았습니다')) {
     return {
       title: '필요한 프로그램이 없습니다',
-      message: '모의주식 환경을 실행하기 위한 프로그램이 설치되어 있지 않습니다.',
+      message: '모의주식 사이트를 실행하기 위한 Git 프로그램이 설치되어 있지 않습니다. 파일을 다운로드하기 위해 필요합니다.',
       solutions: [
-        '1. Git 프로그램을 설치해주세요',
-        '2. Node.js를 설치해주세요',
-        '3. Java JDK 17 이상을 설치해주세요',
-        '4. 설치 후 컴퓨터를 재시작해주세요'
+        '1. 아래 링크에서 Git 프로그램을 다운로드하여 설치해주세요',
+        '2. 설치 후 반드시 컴퓨터를 재시작해주세요',
+        '3. 재시작 후 다시 수업 시작을 눌러주세요'
       ],
       links: [
-        { text: 'Git 다운로드', url: 'https://git-scm.com' },
-        { text: 'Node.js 다운로드', url: 'https://nodejs.org' },
-        { text: 'Java JDK 다운로드', url: 'https://adoptium.net' }
+        { text: 'Git 다운로드 (Windows/Mac)', url: 'https://git-scm.com' }
       ]
     }
   }
 
-  if (error.includes('Java') || error.includes('JDK')) {
+  // Node.js/npm/yarn 관련 오류
+  if (error.includes('yarn') || error.includes('npm') || error.includes('Node.js를 설치하세요')) {
     return {
-      title: 'Java 개발 환경이 필요합니다',
-      message: 'Kotlin Spring Boot 서버 실행을 위해 Java가 필요합니다.',
+      title: 'Node.js가 설치되지 않았습니다',
+      message: '모의주식 사이트를 실행하기 위한 Node.js가 설치되어 있지 않습니다. 웹사이트 실행에 필요한 프로그램입니다.',
       solutions: [
-        '1. Java JDK 17 이상을 설치해주세요',
-        '2. JAVA_HOME 환경변수가 올바르게 설정되어 있는지 확인해주세요',
-        '3. 터미널에서 "java --version" 명령어가 작동하는지 확인해주세요'
+        '1. 아래 링크에서 Node.js LTS 버전을 다운로드하여 설치해주세요',
+        '2. 설치 시 모든 옵션을 기본값으로 두고 설치하세요',
+        '3. 설치 후 반드시 컴퓨터를 재시작해주세요',
+        '4. 재시작 후 다시 수업 시작을 눌러주세요'
       ],
       links: [
-        { text: 'Java JDK 다운로드', url: 'https://adoptium.net' }
+        { text: 'Node.js 다운로드 (LTS 버전)', url: 'https://nodejs.org' }
       ]
     }
   }
 
-  if (error.includes('gradle') || error.includes('Gradle')) {
+  // 의존성 설치 관련 오류
+  if (error.includes('install') || error.includes('의존성') || error.includes('failed') || error.includes('ENOTFOUND')) {
     return {
-      title: 'Gradle 빌드 오류',
-      message: 'Kotlin Spring Boot 프로젝트 빌드 중 오류가 발생했습니다.',
+      title: '인터넷 연결 또는 설치 오류',
+      message: '필요한 파일들을 다운로드하는 중 문제가 발생했습니다.',
       solutions: [
-        '1. Java JDK가 올바르게 설치되어 있는지 확인해주세요',
-        '2. 인터넷 연결을 확인하고 다시 시도해주세요',
-        '3. 프로젝트 폴더를 삭제하고 다시 다운로드해보세요'
+        '1. 인터넷 연결 상태를 확인해주세요 (WiFi 또는 유선 연결)',
+        '2. 방화벽이나 보안 프로그램이 차단하고 있지 않은지 확인해주세요',
+        '3. 5분 후 다시 시도해주세요',
+        '4. 문제가 계속되면 다른 네트워크에서 시도해보세요'
       ]
     }
   }
 
-  if (error.includes('mysql') || error.includes('MySQL')) {
+  // 권한 관련 오류
+  if (error.includes('permission') || error.includes('권한') || error.includes('EACCES') || error.includes('access')) {
     return {
-      title: 'MySQL 데이터베이스 오류',
-      message: '데이터베이스 시스템에 문제가 있습니다.',
+      title: '폴더 접근 권한 문제',
+      message: '선택하신 폴더에 파일을 생성할 권한이 없습니다.',
       solutions: [
-        '1. MySQL이 설치되어 있는지 확인해주세요',
-        '2. MySQL 서비스가 실행 중인지 확인해주세요',
-        '3. 관리자 권한으로 프로그램을 실행해보세요'
+        '1. 다른 폴더를 선택해주세요 (바탕화면, 문서 폴더 등)',
+        '2. 시스템 폴더(Program Files, Windows 등)는 선택하지 마세요',
+        '3. 관리자 권한으로 프로그램을 실행해보세요',
+        '4. 사용자 폴더 내의 일반적인 위치를 선택해주세요'
+      ]
+    }
+  }
+
+  // 포트 관련 오류  
+  if (error.includes('port') || error.includes('EADDRINUSE') || error.includes('already in use')) {
+    return {
+      title: '다른 프로그램이 실행 중입니다',
+      message: '모의주식 사이트가 사용하는 포트를 다른 프로그램이 사용하고 있습니다.',
+      solutions: [
+        '1. 다른 웹 서버나 개발 프로그램을 종료해주세요',
+        '2. 웹 브라우저를 모두 닫고 다시 시도해주세요',
+        '3. 컴퓨터를 재시작 후 다시 시도해주세요',
+        '4. 실행 중인 다른 프로그램들을 확인하고 종료해주세요'
       ]
     }
   }
 
   return {
-    title: '실행 중 오류 발생',
-    message: '예상치 못한 오류가 발생했습니다.',
+    title: '실행 중 예상치 못한 오류가 발생했습니다',
+    message: '모의주식 사이트 실행 과정에서 알 수 없는 문제가 발생했습니다.',
     solutions: [
-      '1. 프로그램을 종료 후 다시 실행해주세요',
-      '2. 다른 프로그램들을 종료 후 재시도해주세요',
-      '3. 컴퓨터를 재시작 후 다시 시도해주세요'
+      '1. 프로그램을 완전히 종료하고 다시 실행해주세요',
+      '2. 다른 실행 중인 프로그램들을 모두 종료해주세요',
+      '3. 컴퓨터를 재시작 후 다시 시도해주세요',
+      '4. 문제가 지속되면 IT 담당자에게 문의해주세요'
     ]
   }
 }
@@ -123,10 +124,10 @@ const PROGRESS_STEPS = [
   { key: 'checking-tools', name: '환경 확인', icon: '🔍' },
   { key: 'preparing', name: '준비 중', icon: '📁' },
   { key: 'cloning', name: '파일 다운로드', icon: '⬇️' },
-  { key: 'installing', name: '빌드 및 설치', icon: '⚙️' },
-  { key: 'starting', name: '서버 시작', icon: '🚀' },
-  { key: 'running', name: '실행 중', icon: '✅' },
-  { key: 'error', name: '오류 발생', icon: '❌' }
+  { key: 'installing', name: '설치 중', icon: '⚙️' },
+  { key: 'starting', name: '시작 중', icon: '🚀' },
+  { key: 'running', name: '수업 진행 중', icon: '✅' },
+  { key: 'error', name: '문제 발생', icon: '❌' }
 ]
 
 export default function App() {
@@ -135,13 +136,10 @@ export default function App() {
     // 초기값으로 localStorage에서 이전에 선택한 폴더 불러오기
     return localStorage.getItem('mozu-workspace-dir') || ''
   })
-  const [dbPassword, setDbPassword] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [currentStep, setCurrentStep] = useState<string>('idle')
-  const [serverStatus, setServerStatus] = useState<{ step: string; message?: string }>({ step: 'idle' })
   const [clientStatus, setClientStatus] = useState<{ step: string; message?: string }>({ step: 'idle' })
-  const [showMysqlHelp, setShowMysqlHelp] = useState(false)
 
   useEffect(() => {
     const off = window.api.onStatusUpdate((s) => {
@@ -149,10 +147,7 @@ export default function App() {
       setCurrentStep(s.step)
       setIsRunning(s.step === 'running')
 
-      // 서버와 클라이언트 개별 상태 업데이트
-      if (s.server) {
-        setServerStatus(s.server)
-      }
+      // 클라이언트 개별 상태 업데이트
       if (s.client) {
         setClientStatus(s.client)
       }
@@ -186,19 +181,94 @@ export default function App() {
   }
 
   const start = async () => {
+    // 입력 검증 강화
+    if (dir && dir.trim()) {
+      // 경로 검증
+      const invalidChars = /[<>:"|?*]/
+      if (invalidChars.test(dir)) {
+        setError(JSON.stringify({
+          title: '잘못된 폴더 경로',
+          message: '폴더 경로에 사용할 수 없는 문자가 포함되어 있습니다.',
+          solutions: [
+            '1. 다른 폴더를 선택해주세요',
+            '2. 폴더명에 특수문자(<, >, :, ", |, ?, *)가 없는 폴더를 선택해주세요',
+            '3. 바탕화면이나 문서 폴더 같은 일반적인 위치를 선택해주세요'
+          ]
+        }))
+        return
+      }
+
+      // 길이 검증 (Windows 경로 제한)
+      if (dir.length > 220) {
+        setError(JSON.stringify({
+          title: '폴더 경로가 너무 깁니다',
+          message: '선택하신 폴더 경로가 너무 깁니다.',
+          solutions: [
+            '1. 더 짧은 경로의 폴더를 선택해주세요',
+            '2. 바탕화면이나 문서 폴더처럼 경로가 짧은 곳을 선택해주세요'
+          ]
+        }))
+        return
+      }
+    }
+
     setError(null)
     setIsRunning(true)
 
     const payload: RepoCfg = {
       ...FIXED_CFG,
-      server: {
-        ...FIXED_CFG.server,
-        dbPassword: dbPassword || undefined,
-      },
-      workspaceDir: dir || undefined,
+      workspaceDir: dir && dir.trim() ? dir.trim() : undefined,
     }
 
     const res = await window.api.startMock(payload)
+    if (!res.ok) {
+      const errorInfo = getErrorSolution(res.error || '')
+      setError(JSON.stringify(errorInfo))
+      setIsRunning(false)
+    }
+  }
+
+  const startLesson = async () => {
+    // 입력 검증 강화
+    if (dir && dir.trim()) {
+      // 경로 검증
+      const invalidChars = /[<>:"|?*]/
+      if (invalidChars.test(dir)) {
+        setError(JSON.stringify({
+          title: '잘못된 폴더 경로',
+          message: '폴더 경로에 사용할 수 없는 문자가 포함되어 있습니다.',
+          solutions: [
+            '1. 다른 폴더를 선택해주세요',
+            '2. 폴더명에 특수문자(<, >, :, ", |, ?, *)가 없는 폴더를 선택해주세요',
+            '3. 바탕화면이나 문서 폴더 같은 일반적인 위치를 선택해주세요'
+          ]
+        }))
+        return
+      }
+
+      // 길이 검증 (Windows 경로 제한)
+      if (dir.length > 220) {
+        setError(JSON.stringify({
+          title: '폴더 경로가 너무 깁니다',
+          message: '선택하신 폴더 경로가 너무 깁니다.',
+          solutions: [
+            '1. 더 짧은 경로의 폴더를 선택해주세요',
+            '2. 바탕화면이나 문서 폴더처럼 경로가 짧은 곳을 선택해주세요'
+          ]
+        }))
+        return
+      }
+    }
+
+    setError(null)
+    setIsRunning(true)
+
+    const payload: RepoCfg = {
+      ...FIXED_CFG,
+      workspaceDir: dir && dir.trim() ? dir.trim() : undefined,
+    }
+
+    const res = await window.api.startLesson(payload)
     if (!res.ok) {
       const errorInfo = getErrorSolution(res.error || '')
       setError(JSON.stringify(errorInfo))
@@ -232,13 +302,13 @@ export default function App() {
               📁 {dir ? '저장 위치 변경' : '저장 위치 선택'}
             </Button>
             <Button
-              onClick={start}
+              onClick={startLesson}
               disabled={isRunning && currentStep !== 'error'}
               className={isRunning ? 'opacity-50 cursor-not-allowed' : ''}
             >
               {isRunning ?
                 (currentStep === 'running' ? '✅ 실행 중' : '⏳ 준비 중...') :
-                '🚀 모의주식 실습환경 시작'
+                '🎓 수업 시작'
               }
             </Button>
             <Button
@@ -247,7 +317,7 @@ export default function App() {
               disabled={!isRunning && currentStep === 'idle'}
               className={(!isRunning && currentStep === 'idle') ? 'opacity-50 cursor-not-allowed' : ''}
             >
-              🛑 실습환경 중지
+              ⏹️ 수업 종료
             </Button>
           </div>
         </div>
@@ -302,7 +372,7 @@ export default function App() {
               </section>
             )
           } catch {
-            // JSON 파싱 실패 시 기존 방식으로 표시
+            // JSON 파싱 실패 시 기존 방식으로 표시ㅣ
             return (
               <section className="bg-red-50 border border-red-200 rounded-2xl p-6">
                 <div className="flex items-start gap-3">
@@ -361,38 +431,69 @@ export default function App() {
 
             {currentStep === 'running' && (
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-green-600">🟢</span>
-                  <span className="font-medium text-green-800">모의주식 환경이 실행되었습니다!</span>
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="text-green-600">✅</span>
+                  <span className="font-bold text-green-800 text-lg">모의주식 수업이 시작되었습니다!</span>
                 </div>
-                <div className="mt-3 space-y-2 text-sm text-green-700">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="bg-white bg-opacity-60 rounded p-3">
-                      <div className="font-medium text-green-800 mb-1">👨‍🏫 선생님용 (관리자)</div>
-                      <a
-                        href="http://admin.localhost:3002"
-                        onClick={(e) => { e.preventDefault(); window.api.openExternal('http://admin.localhost:3002'); }}
-                        className="text-blue-600 hover:text-blue-800 underline font-mono text-xs"
+
+                <div className="bg-white rounded-lg p-4 mb-4">
+                  <div className="text-green-800 font-semibold mb-3 text-center">📋 학생들에게 알려줄 웹사이트 주소</div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 학생용 사이트 */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-blue-600">👨‍🎓</span>
+                        <span className="font-bold text-blue-800">학생용 사이트</span>
+                      </div>
+                      <div className="bg-white rounded border p-3 mb-2">
+                        <code className="text-blue-700 font-mono text-sm break-all">student.localhost:3001</code>
+                      </div>
+                      <button
+                        onClick={() => window.api.openExternal('http://student.localhost:3001/signin')}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm font-medium transition-colors"
                       >
-                        http://admin.localhost:3002
-                      </a>
-                      <div className="text-xs text-gray-600 mt-1">수업 관리, 학생 모니터링</div>
+                        학생용 사이트 열기
+                      </button>
+                      <div className="text-xs text-blue-600 mt-2 text-center">
+                        학생들이 모의주식 거래를 할 수 있는 사이트입니다
+                      </div>
                     </div>
-                    <div className="bg-white bg-opacity-60 rounded p-3">
-                      <div className="font-medium text-green-800 mb-1">🎓 학생용</div>
-                      <a
-                        href="http://student.localhost:3001"
-                        onClick={(e) => { e.preventDefault(); window.api.openExternal('http://student.localhost:3001'); }}
-                        className="text-blue-600 hover:text-blue-800 underline font-mono text-xs"
+
+                    {/* 선생님용 관리자 사이트 */}
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-purple-600">👨‍🏫</span>
+                        <span className="font-bold text-purple-800">선생님용 관리</span>
+                      </div>
+                      <div className="bg-white rounded border p-3 mb-2">
+                        <code className="text-purple-700 font-mono text-sm break-all">admin.localhost:3002</code>
+                      </div>
+                      <button
+                        onClick={() => window.api.openExternal('http://admin.localhost:3002/signin')}
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded text-sm font-medium transition-colors"
                       >
-                        http://student.localhost:3001
-                      </a>
-                      <div className="text-xs text-gray-600 mt-1">모의주식 거래 실습</div>
+                        관리자 사이트 열기
+                      </button>
+                      <div className="text-xs text-purple-600 mt-2 text-center">
+                        수업 현황과 학생 활동을 관리할 수 있는 사이트입니다
+                      </div>
                     </div>
                   </div>
-                  <div className="text-xs text-gray-600 bg-white bg-opacity-40 rounded p-2 mt-2">
-                    💡 <strong>팁:</strong> 위 링크를 클릭하면 자동으로 브라우저에서 열립니다.
-                    학생들에게는 <strong>http://student.localhost:3001</strong> 주소를 안내해주세요.
+                </div>
+
+                <div className="bg-green-100 border border-green-300 rounded-lg p-4">
+                  <div className="flex items-start gap-2">
+                    <span className="text-green-600 text-lg">💡</span>
+                    <div className="flex-1">
+                      <div className="font-semibold text-green-800 mb-2">수업 진행 안내</div>
+                      <ul className="text-sm text-green-700 space-y-1">
+                        <li>• <strong>학생용 주소</strong>를 칠판에 적어 학생들에게 알려주세요</li>
+                        <li>• <strong>선생님용 관리 사이트</strong>에서 학생들의 거래 현황을 실시간으로 확인하세요</li>
+                        <li>• 수업이 끝나면 반드시 <strong>"수업 종료"</strong> 버튼을 눌러주세요</li>
+                        <li>• 학생들이 접속하는데 문제가 있으면 Wi-Fi 연결을 확인해주세요</li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -401,93 +502,20 @@ export default function App() {
         )}
 
         <section className="bg-white rounded-2xl p-6 shadow-soft">
-          <h2 className="font-semibold mb-4">사용 가이드</h2>
+          <h2 className="font-semibold mb-4">사용 방법</h2>
           <ol className="list-decimal pl-5 space-y-2 text-sm text-gray-700">
-            <li><b>데이터베이스 비밀번호</b>를 입력하세요. (설정하지 않았다면 비워두세요)</li>
-            <li><b>📁 저장 위치 선택</b> 버튼으로 프로젝트가 저장될 폴더를 선택하세요.</li>
-            <li><b>🚀 모의주식 실습환경 시작</b>을 누르면 자동으로 다운로드 → 설치 → 실행됩니다.</li>
-            <li>실행 후 학생들이 접속할 수 있는 웹사이트가 자동으로 열립니다.</li>
+            <li><b>📁 저장 위치 선택</b> 버튼을 눌러 수업 파일이 저장될 폴더를 선택하세요.</li>
+            <li><b>🎓 수업 시작</b> 버튼을 누르면 자동으로 모의주식 사이트가 준비됩니다.</li>
+            <li>준비가 완료되면 학생들에게 웹사이트 주소를 알려주세요.</li>
+            <li>수업이 끝나면 <b>⏹️ 수업 종료</b> 버튼을 눌러 마무리하세요.</li>
           </ol>
         </section>
 
-        <section className="bg-white rounded-2xl p-6 shadow-soft">
-          <h2 className="font-semibold mb-4">환경 설정</h2>
-          <div>
-            <label htmlFor="db-password" className="block text-sm font-medium text-gray-700 mb-1">
-              데이터베이스 관리자 비밀번호
-            </label>
-            <input
-              type="password"
-              id="db-password"
-              value={dbPassword}
-              onChange={(e) => setDbPassword(e.target.value)}
-              className="block w-full max-w-sm px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-carrot focus:border-carrot sm:text-sm"
-              placeholder="컴퓨터에 설정된 데이터베이스 비밀번호"
-            />
-            <div className="flex items-center justify-between mt-1">
-              <p className="text-xs text-gray-500">
-                컴퓨터에 설치된 MySQL 데이터베이스의 관리자 비밀번호를 입력하세요. 처음 설치했다면 비워두셔도 됩니다.
-              </p>
-              <button
-                onClick={() => setShowMysqlHelp(!showMysqlHelp)}
-                className="text-xs text-blue-600 hover:text-blue-800 ml-4"
-              >
-                {showMysqlHelp ? '도움말 닫기' : 'MySQL 도움말'}
-              </button>
-            </div>
-
-            {showMysqlHelp && (
-              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <h4 className="font-medium text-blue-900 mb-2">💡 MySQL이 설치되지 않았나요?</h4>
-                <div className="text-sm text-blue-800 space-y-2">
-                  <p><strong>macOS 사용자:</strong></p>
-                  <ol className="list-decimal pl-5 space-y-1">
-                    <li>터미널을 열고 <code className="bg-blue-100 px-1 rounded">brew install mysql</code> 실행</li>
-                    <li><code className="bg-blue-100 px-1 rounded">brew services start mysql</code> 로 MySQL 시작</li>
-                    <li>비밀번호는 비워두고 실행해보세요</li>
-                  </ol>
-
-                  <p className="mt-3"><strong>Windows 사용자:</strong></p>
-                  <ol className="list-decimal pl-5 space-y-1">
-                    <li>이 앱이 자동으로 MySQL을 설치하려고 시도합니다</li>
-                    <li>관리자 권한 요청이 나오면 '예'를 클릭해주세요</li>
-                    <li>설치 완료 후 비밀번호는 비워두고 실행해보세요</li>
-                  </ol>
-
-                  <p className="mt-3"><strong>추가 요구사항:</strong></p>
-                  <ol className="list-decimal pl-5 space-y-1">
-                    <li>Java JDK 17 이상 설치 (Kotlin Spring Boot 서버용)</li>
-                    <li>macOS: <code className="bg-blue-100 px-1 rounded">brew install openjdk@17</code></li>
-                    <li>Windows: <button onClick={() => window.api.openExternal('https://adoptium.net')} className="text-blue-600 underline hover:text-blue-800">adoptium.net</button>에서 다운로드</li>
-                  </ol>
-
-                  <p className="mt-3 text-blue-600">
-                    <strong>💡 팁:</strong> 대부분의 경우 처음 설치 시 비밀번호는 비워두셔도 됩니다.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
 
         <section className="bg-white rounded-2xl p-6 shadow-soft">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="font-semibold">실행 상태</h2>
+            <h2 className="font-semibold">진행 상황</h2>
             <div className="flex gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${serverStatus.step === 'running' ? 'bg-green-500' :
-                  serverStatus.step === 'error' ? 'bg-red-500' :
-                    serverStatus.step === 'building' || serverStatus.step === 'starting' ? 'bg-yellow-500' :
-                      'bg-gray-300'
-                  }`}></div>
-                <span className="text-gray-700">
-                  서버: {serverStatus.step === 'idle' ? '대기중' :
-                    serverStatus.step === 'building' ? '빌드중' :
-                      serverStatus.step === 'starting' ? '시작중' :
-                        serverStatus.step === 'running' ? '실행중' :
-                          serverStatus.step === 'error' ? '오류' : serverStatus.step}
-                </span>
-              </div>
               <div className="flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${clientStatus.step === 'running' ? 'bg-green-500' :
                   clientStatus.step === 'error' ? 'bg-red-500' :
@@ -495,11 +523,16 @@ export default function App() {
                       'bg-gray-300'
                   }`}></div>
                 <span className="text-gray-700">
-                  클라이언트: {clientStatus.step === 'idle' ? '대기중' :
-                    clientStatus.step === 'building' ? '빌드중' :
-                      clientStatus.step === 'starting' ? '시작중' :
-                        clientStatus.step === 'running' ? '실행중' :
-                          clientStatus.step === 'error' ? '오류' : clientStatus.step}
+                  상태: {clientStatus.step === 'idle' ? '대기중' :
+                    clientStatus.step === 'building' ? '웹사이트 준비중' :
+                      clientStatus.step === 'starting' ? '모의주식 사이트 시작중' :
+                        clientStatus.step === 'running' ? '✅ 수업 진행중 (학생 접속 가능)' :
+                          clientStatus.step === 'error' ? '❌ 문제발생 - 재시작 필요' : clientStatus.step}
+                  {clientStatus.message && (
+                    <span className="block text-xs text-gray-500 mt-1">
+                      📝 {clientStatus.message}
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
@@ -508,10 +541,10 @@ export default function App() {
           <p className="text-xs text-gray-500 mt-3">
             {dir ? (
               <>
-                프로젝트 저장 위치: <code className="bg-gray-100 px-2 py-1 rounded text-sm break-all">{dir}</code>
+                수업 파일 저장 위치: <code className="bg-gray-100 px-2 py-1 rounded text-sm break-all">{dir}</code>
                 <br />
                 <span className="text-xs text-gray-600">
-                  💾 이 위치에 server, frontend 폴더가 생성됩니다
+                  💾 이 위치에 수업용 파일들이 저장됩니다
                 </span>
               </>
             ) : (
