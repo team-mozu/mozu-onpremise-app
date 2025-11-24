@@ -14,6 +14,7 @@ declare global {
       startLesson: (cfg: RepoCfg) => Promise<{ ok: boolean, error?: string }>
       stopMock: () => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<void>
+      getLocalIP: () => Promise<string>
       onStatusUpdate: (cb: (status: LaunchStatus) => void) => () => void
     }
   }
@@ -24,10 +25,10 @@ const FIXED_CFG: RepoCfg = {
   frontend: {
     url: 'https://github.com/team-mozu/mozu-FE.git',
     branch: 'main',
-    startCommand: 'yarn dev',
     installCommand: 'yarn install',
+    startCommand: 'yarn dev:ip',
     cwdName: 'frontend',
-    devUrl: 'http://localhost:3000',
+    devUrl: 'http://localhost:3001',
   }
 }
 
@@ -140,6 +141,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [currentStep, setCurrentStep] = useState<string>('idle')
   const [clientStatus, setClientStatus] = useState<{ step: string; message?: string }>({ step: 'idle' })
+  const [localIP, setLocalIP] = useState<string>('localhost')
 
   useEffect(() => {
     const off = window.api.onStatusUpdate((s) => {
@@ -157,6 +159,10 @@ export default function App() {
         setIsRunning(false)
       }
     })
+
+    // IP 주소 가져오기
+    window.api.getLocalIP().then(setLocalIP).catch(() => setLocalIP('localhost'))
+
     return () => off()
   }, [])
 
@@ -166,32 +172,25 @@ export default function App() {
       setDir(picked)
       // 선택된 폴더를 localStorage에 저장하여 다음에 기본값으로 사용
       localStorage.setItem('mozu-workspace-dir', picked)
-    } else {
-      // 권한 문제나 취소 시 사용자에게 알림
-      setError(JSON.stringify({
-        title: '폴더 선택 실패',
-        message: '폴더를 선택할 수 없습니다.',
-        solutions: [
-          '1. 다른 폴더를 선택해주세요',
-          '2. 폴더에 읽기/쓰기 권한이 있는지 확인해주세요',
-          '3. 시스템 폴더가 아닌 일반 폴더를 선택해주세요'
-        ]
-      }))
     }
+    // 사용자가 취소한 경우(picked === null)는 아무 처리하지 않음
   }
 
   const start = async () => {
     // 입력 검증 강화
     if (dir && dir.trim()) {
-      // 경로 검증
-      const invalidChars = /[<>:"|?*]/
-      if (invalidChars.test(dir)) {
+      // 윈도우 경로 검증 (콜론은 드라이브 문자 다음에만 허용)
+      const invalidChars = /[<>"|?*]/
+      const hasInvalidChars = invalidChars.test(dir)
+      const hasInvalidColon = dir.includes(':') && !(/^[A-Za-z]:\\/.test(dir) || dir.match(/^[A-Za-z]:[^:]*$/))
+
+      if (hasInvalidChars || hasInvalidColon) {
         setError(JSON.stringify({
           title: '잘못된 폴더 경로',
           message: '폴더 경로에 사용할 수 없는 문자가 포함되어 있습니다.',
           solutions: [
             '1. 다른 폴더를 선택해주세요',
-            '2. 폴더명에 특수문자(<, >, :, ", |, ?, *)가 없는 폴더를 선택해주세요',
+            '2. 폴더명에 특수문자(<, >, ", |, ?, *)가 없는 폴더를 선택해주세요',
             '3. 바탕화면이나 문서 폴더 같은 일반적인 위치를 선택해주세요'
           ]
         }))
@@ -199,7 +198,7 @@ export default function App() {
       }
 
       // 길이 검증 (Windows 경로 제한)
-      if (dir.length > 220) {
+      if (dir.length > 260) {
         setError(JSON.stringify({
           title: '폴더 경로가 너무 깁니다',
           message: '선택하신 폴더 경로가 너무 깁니다.',
@@ -231,15 +230,18 @@ export default function App() {
   const startLesson = async () => {
     // 입력 검증 강화
     if (dir && dir.trim()) {
-      // 경로 검증
-      const invalidChars = /[<>:"|?*]/
-      if (invalidChars.test(dir)) {
+      // 윈도우 경로 검증 (콜론은 드라이브 문자 다음에만 허용)
+      const invalidChars = /[<>"|?*]/
+      const hasInvalidChars = invalidChars.test(dir)
+      const hasInvalidColon = dir.includes(':') && !(/^[A-Za-z]:\\/.test(dir) || dir.match(/^[A-Za-z]:[^:]*$/))
+
+      if (hasInvalidChars || hasInvalidColon) {
         setError(JSON.stringify({
           title: '잘못된 폴더 경로',
           message: '폴더 경로에 사용할 수 없는 문자가 포함되어 있습니다.',
           solutions: [
             '1. 다른 폴더를 선택해주세요',
-            '2. 폴더명에 특수문자(<, >, :, ", |, ?, *)가 없는 폴더를 선택해주세요',
+            '2. 폴더명에 특수문자(<, >, ", |, ?, *)가 없는 폴더를 선택해주세요',
             '3. 바탕화면이나 문서 폴더 같은 일반적인 위치를 선택해주세요'
           ]
         }))
@@ -247,7 +249,7 @@ export default function App() {
       }
 
       // 길이 검증 (Windows 경로 제한)
-      if (dir.length > 220) {
+      if (dir.length > 260) {
         setError(JSON.stringify({
           title: '폴더 경로가 너무 깁니다',
           message: '선택하신 폴더 경로가 너무 깁니다.',
@@ -280,6 +282,7 @@ export default function App() {
     setIsRunning(false)
     setCurrentStep('idle')
     setError(null)
+    setClientStatus({ step: 'idle' })
     await window.api.stopMock()
   }
 
@@ -290,7 +293,10 @@ export default function App() {
           <div className="flex items-center gap-3">
             <img src={logo} alt="Mozu On-Premise App Logo" className="w-10 h-10" />
             <div>
-              <h1 className="text-xl font-bold"><span className="text-carrot">모주</span> <span className="text-xs text-[#71717A]">모의주식투자</span></h1>
+              <h1 className="text-xl font-bold">
+                <span className="text-carrot">모주</span>
+                <span className="text-xs text-[#71717A]">모의주식투자</span>
+              </h1>
               <p className="text-sm text-gray-500">
                 모의주식투자 환경을 원클릭으로 실행
                 {dir ? <span className="ml-2 text-gray-400">(경로: {dir})</span> : null}
@@ -447,10 +453,10 @@ export default function App() {
                         <span className="font-bold text-blue-800">학생용 사이트</span>
                       </div>
                       <div className="bg-white rounded border p-3 mb-2">
-                        <code className="text-blue-700 font-mono text-sm break-all">student.localhost:3001</code>
+                        <code className="text-blue-700 font-mono text-sm break-all">{localIP}:3001</code>
                       </div>
                       <button
-                        onClick={() => window.api.openExternal('http://student.localhost:3001/signin')}
+                        onClick={() => window.api.openExternal(`http://${localIP}:3001/signin`)}
                         className="w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm font-medium transition-colors"
                       >
                         학생용 사이트 열기

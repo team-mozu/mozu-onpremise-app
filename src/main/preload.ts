@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { RepoConfig, LaunchStatus } from '../shared/types'
 
 // 화이트리스트 채널 (메인에서 실제로 쓰는 채널만 노출)
-const INVOKE_CHANNELS = new Set(['choose-dir', 'start-mock', 'start-lesson', 'stop-mock', 'open-external'] as const)
+const INVOKE_CHANNELS = new Set(['choose-dir', 'start-mock', 'start-lesson', 'stop-mock', 'open-external', 'get-local-ip'] as const)
 const ON_CHANNELS = new Set(['status-update'] as const)
 
 function safeInvoke<T = any>(channel: string, ...args: any[]): Promise<T> {
@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   startLesson: (config: RepoConfig): Promise<{ ok: boolean; error?: string }> => safeInvoke('start-lesson', config),
   stopMock: (): Promise<{ ok: boolean }> => safeInvoke('stop-mock'),
   openExternal: (url: string): Promise<void> => safeInvoke('open-external', url),
+  getLocalIP: (): Promise<string> => safeInvoke('get-local-ip'),
   onStatusUpdate
 })
 
@@ -52,6 +53,7 @@ declare global {
       startLesson: (config: RepoConfig) => Promise<{ ok: boolean; error?: string }>
       stopMock: () => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<void>
+      getLocalIP: () => Promise<string>
       onStatusUpdate: (cb: (status: LaunchStatus) => void) => () => void
     }
   }

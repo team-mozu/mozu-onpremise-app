@@ -29,16 +29,6 @@
       "package.json",
       "!**/ffmpeg*"
     ],
-    "extraFiles": [
-      {
-        "from": "resources/jre",
-        "to": "jre"
-      },
-      {
-        "from": "resources/server.jar",
-        "to": "server.jar"
-      }
-    ],
     "npmRebuild": false,
     "directories": {
       "output": "release"
@@ -57,11 +47,17 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "artifactName": "Mozu-OnPremise-Setup-${version}.${ext}",
+      "artifactName": "${productName}-${version}.${ext}",
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
